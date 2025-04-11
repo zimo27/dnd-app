@@ -1,0 +1,41 @@
+Assignment Overview
+You'll build a Next.js application (one repo containing both frontend and backend) integrated with Supabase for user authentication and management. Your app will provide an interactive, text-based, AI-powered Dungeons & Dragons (D&D)-style game.
+Think of it as an interactive storytelling game where players choose roles and make decisions that shape the outcome of the narrative.
+We’ll provide various scenario templates similar to the "Asian helicopter parenting" or "White House Chaos: Trump's Advisor" example. Your application should be designed flexibly so it can adapt and run in any scenario based on a provided template.
+
+Understanding the D&D-Style Gameplay
+Below is the most basic gameplay loop for DnD:
+The AI (acting as the storyteller or "Dungeon Master") describes the scene or situation.
+You, the player, decide what your character does or says.
+The AI determines the outcome based on your character's abilities, your choices, and a Random Number Generator D20.
+The AI describes the results of your actions and how the world reacts.
+The story progresses based on these interactions. Repeat!
+The real magic and lasting appeal come from Meaningful Story Progression. Your choices should feel like they matter, influencing the narrative and the world around you. The AI should ideally "remember" key events and decisions, creating a sense of continuity and consequence.
+
+Goals & Deliverables
+User Authentication & Management
+Set up Supabase to handle user signup, login, and basic profile management.
+Interactive AI-Powered Gameplay
+Implement a text-based interactive AI experience where:
+The AI should introduce the game setting (from the template), guide the user through choosing customizations (playerCustomizations), and manage the story progression based on user interaction.
+The AI needs to act as a dynamic storyteller, adapting the narrative based on player choices and maintaining a sense of memory/continuity.
+You're free to use OpenAI APIs or similar services for text generation.
+User Experience & Product Thinking
+Design a clear and engaging interface. Prioritize making the user journey intuitive and immersive.
+Think about user motivation:
+Sense of Progression: How can the player see their character or situation evolving based on their actions?
+Goals & Achievement: How can the game present meaningful short-term or long-term goals that emerge naturally from the story? (e.g., In the 'Raising Your Asian Child' scenario, this might involve seeing specific outcomes like improved grades, or facing challenges like parent-teacher conferences based on prior actions).
+Extra points if you enhance the experience with visuals, voice interactions, sound effects, or background music.
+Technical Requirements
+Stack: Next.js (React + Node.js)
+Database & Auth: Supabase
+AI Integration: OpenAI or any LLM service you're comfortable with.
+Repo Structure: Clearly organized frontend and backend within a single repository.
+
+Appendix - Example Scenario Templates
+Understanding the Scenario Templates(in the Appendix)
+The provided JSON templates (see Appendix) define the specific game world. Here's a quick breakdown of their structure:
+attributes: These are the core statistics or characteristics that define your character's capabilities within that scenario (e.g., "Academic Pressure" or "Spin").
+baseSkills: These are specific actions tied to attributes, representing what your character can attempt to do (e.g., "Grade Negotiation" or "Tantrum Management").
+playerCustomizations: These are choices you make at the beginning of the game, like selecting a role or background. These choices often grant bonuses to specific attributes.
+The typical flow should begin with the player choosing their playerCustomizations. Then, based on the template's design, the player might allocate a limited pool of points to their attributes, which in turn shapes their effectiveness with related baseSkills.
