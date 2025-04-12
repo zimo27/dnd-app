@@ -63,4 +63,7 @@ export async function generateChatResponse(
     console.error('Error generating chat response:', error);
     throw error;
   }
-} 
+}
+
+// Export skill-related functions
+export * from './skills'; 

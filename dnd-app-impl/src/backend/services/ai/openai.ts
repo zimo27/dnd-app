@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { GameState } from '@/shared/types/game';
 import { getScenarioById } from '../game/scenarios';
+import { ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam, ChatCompletionAssistantMessageParam } from 'openai/resources';
 
 // Initialize the OpenAI client
 const openai = new OpenAI({
@@ -53,18 +54,37 @@ As the game master, respond to the player's actions while:
 5. Responding in character and advancing the story based on the player's input
 `;
 
+    // Create properly typed messages array
+    const systemMessage: ChatCompletionSystemMessageParam = {
+      role: "system",
+      content: systemPrompt
+    };
+    
+    const historyMessages = gameState.history.map(message => {
+      if (message.sender === 'user') {
+        return {
+          role: "user",
+          content: message.message
+        } as ChatCompletionUserMessageParam;
+      } else {
+        return {
+          role: "assistant",
+          content: message.message
+        } as ChatCompletionAssistantMessageParam;
+      }
+    });
+    
+    const userMessageParam: ChatCompletionUserMessageParam = {
+      role: "user",
+      content: userMessage
+    };
+    
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
-        { 
-          role: "system", 
-          content: systemPrompt
-        },
-        ...gameState.history.map(message => ({
-          role: message.sender === 'user' ? 'user' : 'assistant' as const,
-          content: message.message
-        })),
-        { role: "user", content: userMessage }
+        systemMessage,
+        ...historyMessages,
+        userMessageParam
       ],
       temperature: 0.7,
       max_tokens: 500,

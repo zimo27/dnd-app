@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { fetchScenarioById, generateChatResponse } from '@/lib/api';
+import { performSkillCheck, getNarrativeForSkill } from '@/lib/api/skills';
 import { Message, GameState, Scenario, SkillCheckResult } from '@/shared/types/game';
 import { useAuth } from '@/lib/auth';
 import Header from '@/components/ui/Header';
@@ -60,7 +61,7 @@ export default function ChatPage() {
           const historyMessages = newGameState.history.map((historyItem, index) => ({
             id: index.toString(),
             content: historyItem.message,
-            sender: historyItem.sender === 'user' ? 'user' : 'ai',
+            sender: historyItem.sender === 'user' ? 'user' : 'ai' as 'user' | 'ai',
             timestamp: new Date(historyItem.timestamp),
           }));
           
@@ -106,13 +107,13 @@ export default function ChatPage() {
 
     try {
       // Update game state with the new message
-      const updatedGameState = {
+      const updatedGameState: GameState = {
         ...gameState,
         history: [
           ...gameState.history,
           {
             message: userMessage.content,
-            sender: 'user',
+            sender: 'user' as 'user' | 'system',
             timestamp: new Date().toISOString(),
           },
         ],
@@ -141,7 +142,7 @@ export default function ChatPage() {
           ...updatedGameState.history,
           {
             message: aiResponseText,
-            sender: 'system',
+            sender: 'system' as 'user' | 'system',
             timestamp: new Date().toISOString(),
           },
         ],
@@ -172,60 +173,86 @@ export default function ChatPage() {
     const skill = scenario.baseSkills?.[skillName];
     if (!skill) return;
     
-    const attributeValue = gameState.character_data.attributes[skill.attribute] || 0;
+    setIsLoading(true);
     
-    // Basic dice roll (d20)
-    const roll = Math.floor(Math.random() * 20) + 1;
-    const totalRoll = roll + attributeValue;
-    
-    // Difficulty is arbitrary for this example
-    const difficulty = 10;
-    const success = totalRoll >= difficulty;
-    
-    const result: SkillCheckResult = {
-      success,
-      roll,
-      difficulty,
-      attribute: skill.attribute,
-      attributeValue,
-      skillName,
-      narrativeResult: success 
-        ? `You successfully used ${skillName}!` 
-        : `Your attempt at ${skillName} failed.`
-    };
-    
-    setSkillCheckResult(result);
-    
-    // Add skill check message
-    const skillMessage: Message = {
-      id: Date.now().toString(),
-      content: `[Skill Check: ${skillName}] ${result.narrativeResult} (Rolled ${roll} + ${attributeValue} = ${totalRoll} vs DC ${difficulty})`,
-      sender: 'ai',
-      timestamp: new Date(),
-    };
-    
-    setMessages(prev => [...prev, skillMessage]);
-    
-    // Update game state with skill check
-    const updatedGameState = {
-      ...gameState,
-      history: [
-        ...gameState.history,
+    try {
+      // Use the API to perform the skill check
+      const result = await performSkillCheck(gameState, skillName);
+      setSkillCheckResult(result);
+      
+      // Add skill check message
+      const skillMessage: Message = {
+        id: Date.now().toString(),
+        content: `[Skill Check: ${skillName}] ${result.narrativeResult} (Rolled ${result.roll} + ${result.attributeValue} = ${result.roll + result.attributeValue} vs DC ${result.difficulty})`,
+        sender: 'ai',
+        timestamp: new Date(),
+      };
+      
+      setMessages(prev => [...prev, skillMessage]);
+      
+      // Update game state with skill check
+      const updatedGameState: GameState = {
+        ...gameState,
+        history: [
+          ...gameState.history,
+          {
+            message: skillMessage.content,
+            sender: 'system' as 'user' | 'system',
+            timestamp: new Date().toISOString(),
+            roll: {
+              value: result.roll,
+              attribute: result.attribute,
+              modified_value: result.roll + result.attributeValue
+            }
+          },
+        ],
+        updated_at: new Date().toISOString(),
+      };
+      
+      setGameState(updatedGameState);
+      
+      // Get narrative continuation based on skill check
+      const narrativeResponse = await getNarrativeForSkill(updatedGameState, result);
+      
+      // Create AI message with narrative continuation
+      const aiMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: narrativeResponse,
+        sender: 'ai',
+        timestamp: new Date(),
+      };
+      
+      setMessages(prev => [...prev, aiMessage]);
+      
+      // Update game state with AI narrative response
+      setGameState({
+        ...updatedGameState,
+        history: [
+          ...updatedGameState.history,
+          {
+            message: narrativeResponse,
+            sender: 'system' as 'user' | 'system',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        updated_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('Error processing skill check:', error);
+      
+      // Add error message
+      setMessages(prev => [
+        ...prev,
         {
-          message: skillMessage.content,
-          sender: 'system',
-          timestamp: new Date().toISOString(),
-          roll: {
-            value: roll,
-            attribute: skill.attribute,
-            modified_value: totalRoll
-          }
+          id: (Date.now() + 1).toString(),
+          content: "I'm sorry, there was a problem processing your skill check. Please try again.",
+          sender: 'ai',
+          timestamp: new Date(),
         },
-      ],
-      updated_at: new Date().toISOString(),
-    };
-    
-    setGameState(updatedGameState);
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
     
     // Auto-scroll
     setTimeout(() => {
@@ -402,27 +429,69 @@ export default function ChatPage() {
 
       {/* Input Form */}
       <div className="border-t border-gray-700 bg-gray-800 p-4">
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto flex gap-4">
-          <input
-            type="text"
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            placeholder="Type your message..."
-            className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
-            disabled={isLoading}
-          />
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="bg-gradient-to-r from-purple-500 to-pink-600 text-white px-6 py-2 rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all duration-300 disabled:opacity-50"
-          >
-            {isLoading ? (
-              <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
-            ) : (
-              'Send'
-            )}
-          </button>
-        </form>
+        <div className="max-w-3xl mx-auto">
+          {/* Skills Bar */}
+          {gameState && scenario && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-sm font-medium text-gray-300">Available Skills</h4>
+                <button 
+                  onClick={() => setShowStats(!showStats)}
+                  className="text-xs text-purple-400 hover:text-purple-300"
+                >
+                  {showStats ? 'Hide Character Sheet' : 'Show Character Sheet'}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2 pb-2 overflow-x-auto">
+                {Object.entries(gameState.character_data.skills || {})
+                  .filter(([_, isAvailable]) => isAvailable)
+                  .map(([skillName, _]) => {
+                    const skill = scenario.baseSkills?.[skillName];
+                    const attributeValue = gameState.character_data.attributes[skill?.attribute || ''] || 0;
+                    
+                    return (
+                      <button
+                        key={skillName}
+                        onClick={() => handleUseSkill(skillName)}
+                        disabled={isLoading}
+                        className={`
+                          px-3 py-1.5 rounded text-sm flex items-center whitespace-nowrap
+                          ${isLoading ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-500'}
+                          transition-colors duration-300
+                        `}
+                        title={skill?.description || skillName}
+                      >
+                        <span className="mr-1">{skillName}</span>
+                        <span className="text-xs bg-gray-700 px-1.5 py-0.5 rounded">+{attributeValue}</span>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+          
+          <form onSubmit={handleSubmit} className="flex gap-4">
+            <input
+              type="text"
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              placeholder="Type your message..."
+              className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              disabled={isLoading}
+            />
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="bg-gradient-to-r from-purple-500 to-pink-600 text-white px-6 py-2 rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all duration-300 disabled:opacity-50"
+            >
+              {isLoading ? (
+                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+              ) : (
+                'Send'
+              )}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );
