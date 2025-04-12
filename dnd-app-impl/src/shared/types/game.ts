@@ -34,4 +34,35 @@ export interface Scenario {
   id: string;
   title: string;
   description: string;
+  "Dnd-Scenario"?: string;
+  attributes?: Record<string, string>;
+  baseSkills?: Record<string, {
+    attribute: string;
+    description: string;
+  }>;
+  startingPoint?: string;
+  playerCustomizations?: Record<string, {
+    description: string;
+    content: Record<string, {
+      description: string;
+      attributeBonus: Record<string, number>;
+    }>;
+  }>;
+}
+
+export interface SkillCheckResult {
+  success: boolean;
+  roll: number;
+  difficulty: number;
+  attribute: string;
+  attributeValue: number;
+  skillName: string;
+  narrativeResult: string;
+}
+
+export interface CharacterCreationState {
+  scenario_id: string;
+  customizations: Record<string, string>;
+  attributes: Record<string, number>;
+  skills: Record<string, boolean>;
 } 

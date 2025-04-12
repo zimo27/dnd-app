@@ -1,21 +1,25 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { fetchScenarioById, generateChatResponse } from '@/lib/api';
-import { Message, GameState } from '@/shared/types/game';
+import { Message, GameState, Scenario, SkillCheckResult } from '@/shared/types/game';
 import { useAuth } from '@/lib/auth';
 import Header from '@/components/ui/Header';
 
 export default function ChatPage() {
   const params = useParams();
+  const router = useRouter();
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const [scenario, setScenario] = useState<Scenario | null>(null);
+  const [showStats, setShowStats] = useState(false);
+  const [skillCheckResult, setSkillCheckResult] = useState<SkillCheckResult | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Initialize game state and welcome message
@@ -23,34 +27,45 @@ export default function ChatPage() {
     async function initialize() {
       try {
         // Get scenario details
-        const scenario = await fetchScenarioById(params.id as string);
+        const scenarioData = await fetchScenarioById(params.id as string);
+        setScenario(scenarioData);
         
-        // Create initial game state
-        const newGameState: GameState = {
-          id: `game_${Date.now()}`,
-          user_id: user?.id || 'anonymous',
-          scenario_id: params.id as string,
-          character_data: {
-            attributes: {},
-            skills: {},
-            customizations: {}
-          },
-          history: [],
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
+        // Try to load existing game state from localStorage
+        const savedGameState = localStorage.getItem(`gameState_${params.id}`);
+        let newGameState: GameState;
+        
+        if (savedGameState) {
+          newGameState = JSON.parse(savedGameState);
+          console.log('Loaded saved game state:', newGameState);
+        } else {
+          // Redirect to character creation if no saved game state
+          router.push(`/scenarios/${params.id}/character`);
+          return;
+        }
         
         setGameState(newGameState);
         
-        // Add initial system message
-        setMessages([
-          {
-            id: '1',
-            content: `Welcome to "${scenario.title}"! I am your AI game master. How would you like to begin your adventure?`,
-            sender: 'ai',
-            timestamp: new Date(),
-          },
-        ]);
+        // Add initial system message if there's no history
+        if (newGameState.history.length === 0) {
+          setMessages([
+            {
+              id: '1',
+              content: `Welcome to "${scenarioData.title}"! I am your AI game master. ${scenarioData.startingPoint || 'How would you like to begin your adventure?'}`,
+              sender: 'ai',
+              timestamp: new Date(),
+            },
+          ]);
+        } else {
+          // Convert history to messages
+          const historyMessages = newGameState.history.map((historyItem, index) => ({
+            id: index.toString(),
+            content: historyItem.message,
+            sender: historyItem.sender === 'user' ? 'user' : 'ai',
+            timestamp: new Date(historyItem.timestamp),
+          }));
+          
+          setMessages(historyMessages);
+        }
         
         setInitialLoading(false);
       } catch (error) {
@@ -60,12 +75,19 @@ export default function ChatPage() {
     }
 
     initialize();
-  }, [params.id, user]);
+  }, [params.id, user, router]);
 
   // Scroll to bottom whenever messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Save game state to localStorage whenever it changes
+  useEffect(() => {
+    if (gameState) {
+      localStorage.setItem(`gameState_${params.id}`, JSON.stringify(gameState));
+    }
+  }, [gameState, params.id]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,6 +166,73 @@ export default function ChatPage() {
     }
   };
 
+  const handleUseSkill = async (skillName: string) => {
+    if (!gameState || !scenario || isLoading) return;
+    
+    const skill = scenario.baseSkills?.[skillName];
+    if (!skill) return;
+    
+    const attributeValue = gameState.character_data.attributes[skill.attribute] || 0;
+    
+    // Basic dice roll (d20)
+    const roll = Math.floor(Math.random() * 20) + 1;
+    const totalRoll = roll + attributeValue;
+    
+    // Difficulty is arbitrary for this example
+    const difficulty = 10;
+    const success = totalRoll >= difficulty;
+    
+    const result: SkillCheckResult = {
+      success,
+      roll,
+      difficulty,
+      attribute: skill.attribute,
+      attributeValue,
+      skillName,
+      narrativeResult: success 
+        ? `You successfully used ${skillName}!` 
+        : `Your attempt at ${skillName} failed.`
+    };
+    
+    setSkillCheckResult(result);
+    
+    // Add skill check message
+    const skillMessage: Message = {
+      id: Date.now().toString(),
+      content: `[Skill Check: ${skillName}] ${result.narrativeResult} (Rolled ${roll} + ${attributeValue} = ${totalRoll} vs DC ${difficulty})`,
+      sender: 'ai',
+      timestamp: new Date(),
+    };
+    
+    setMessages(prev => [...prev, skillMessage]);
+    
+    // Update game state with skill check
+    const updatedGameState = {
+      ...gameState,
+      history: [
+        ...gameState.history,
+        {
+          message: skillMessage.content,
+          sender: 'system',
+          timestamp: new Date().toISOString(),
+          roll: {
+            value: roll,
+            attribute: skill.attribute,
+            modified_value: totalRoll
+          }
+        },
+      ],
+      updated_at: new Date().toISOString(),
+    };
+    
+    setGameState(updatedGameState);
+    
+    // Auto-scroll
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
   if (initialLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center">
@@ -159,7 +248,7 @@ export default function ChatPage() {
       
       {/* Back to Scenario Link */}
       <div className="bg-gray-800 border-b border-gray-700">
-        <div className="container mx-auto px-4 py-2">
+        <div className="container mx-auto px-4 py-2 flex justify-between items-center">
           <Link
             href={`/scenarios/${params.id}`}
             className="text-purple-400 hover:text-purple-300 transition-colors duration-300 flex items-center"
@@ -169,8 +258,77 @@ export default function ChatPage() {
             </svg>
             Back to Scenario
           </Link>
+          
+          {/* Character Stats Toggle */}
+          <button
+            onClick={() => setShowStats(!showStats)}
+            className="text-purple-400 hover:text-purple-300 flex items-center text-sm"
+          >
+            {showStats ? 'Hide Character' : 'Show Character'}
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={showStats ? "M19 9l-7 7-7-7" : "M9 5l7 7-7 7"} />
+            </svg>
+          </button>
         </div>
       </div>
+      
+      {/* Character Stats Panel */}
+      {showStats && gameState && (
+        <div className="bg-gray-800 border-b border-gray-700 py-3">
+          <div className="container mx-auto px-4">
+            <div className="bg-gray-700 rounded-lg p-4">
+              <h3 className="text-white font-medium mb-3">Character Sheet</h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Customizations */}
+                <div>
+                  <h4 className="text-sm font-medium text-gray-300 mb-2">Character</h4>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    {Object.entries(gameState.character_data.customizations || {}).map(([key, value]) => (
+                      <div key={key} className="col-span-2 text-sm">
+                        <span className="text-gray-400">{key}: </span>
+                        <span className="text-white">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* Attributes */}
+                <div>
+                  <h4 className="text-sm font-medium text-gray-300 mb-2">Attributes</h4>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    {Object.entries(gameState.character_data.attributes || {}).map(([key, value]) => (
+                      <div key={key} className="col-span-1 text-sm">
+                        <span className="text-gray-400">{key}: </span>
+                        <span className="text-white">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              
+              {/* Skills */}
+              <div className="mt-3">
+                <h4 className="text-sm font-medium text-gray-300 mb-2">Skills</h4>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(gameState.character_data.skills || {})
+                    .filter(([_, isAvailable]) => isAvailable)
+                    .map(([skillName, _]) => (
+                      <button
+                        key={skillName}
+                        onClick={() => handleUseSkill(skillName)}
+                        className="bg-gray-600 hover:bg-gray-500 text-white text-xs px-2 py-1 rounded transition-colors duration-300"
+                        title={scenario?.baseSkills?.[skillName]?.description || skillName}
+                      >
+                        {skillName}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chat Messages */}
       <div className="flex-1 overflow-y-auto p-4">
@@ -200,7 +358,39 @@ export default function ChatPage() {
                   <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
                   <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
                   <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                  <span className="text-sm text-gray-400 ml-2"></span>
+                  <span className="text-sm text-gray-400 ml-2">AI is thinking...</span>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Skill check result */}
+          {skillCheckResult && !isLoading && (
+            <div className="flex justify-center">
+              <div className={`bg-gray-800 text-gray-200 rounded-lg p-3 text-sm ${
+                skillCheckResult.success ? 'border border-green-500' : 'border border-red-500'
+              }`}>
+                <div className="flex items-center mb-1">
+                  <span className={`font-bold mr-2 ${
+                    skillCheckResult.success ? 'text-green-400' : 'text-red-400'
+                  }`}>
+                    {skillCheckResult.success ? 'SUCCESS!' : 'FAILED!'}
+                  </span>
+                  <span className="text-gray-400">{skillCheckResult.skillName}</span>
+                </div>
+                <div className="flex space-x-3 text-xs">
+                  <div>
+                    <span className="text-gray-400">Roll:</span> {skillCheckResult.roll}
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Bonus:</span> +{skillCheckResult.attributeValue}
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Total:</span> {skillCheckResult.roll + skillCheckResult.attributeValue}
+                  </div>
+                  <div>
+                    <span className="text-gray-400">DC:</span> {skillCheckResult.difficulty}
+                  </div>
                 </div>
               </div>
             </div>

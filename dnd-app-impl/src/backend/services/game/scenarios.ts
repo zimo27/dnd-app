@@ -1,7 +1,9 @@
 import { Scenario } from '@/shared/types/game';
 import { supabase } from '@/lib/api/supabase';
+import fs from 'fs';
+import path from 'path';
 
-// Mock data until we have a database set up
+// Mock data for listing scenarios (minimal info)
 const MOCK_SCENARIOS: Record<string, Scenario> = {
   'AsianParent': {
     id: 'AsianParent',
@@ -16,7 +18,7 @@ const MOCK_SCENARIOS: Record<string, Scenario> = {
 };
 
 /**
- * Get all available scenarios
+ * Get all available scenarios (minimal info for listing)
  */
 export async function getScenarios(): Promise<Scenario[]> {
   try {
@@ -32,19 +34,35 @@ export async function getScenarios(): Promise<Scenario[]> {
 }
 
 /**
- * Get a specific scenario by ID
+ * Get a specific scenario by ID with full data
  */
 export async function getScenarioById(id: string): Promise<Scenario | null> {
   try {
-    // In the future, replace with actual database query
-    // const { data, error } = await supabase
-    //   .from('scenarios')
-    //   .select('*')
-    //   .eq('id', id)
-    //   .single();
-    
-    // For now, use mock data
-    return MOCK_SCENARIOS[id] || null;
+    // Try to load the full scenario data from JSON file
+    try {
+      const scenarioPath = path.join(process.cwd(), 'public', 'scenarios', `${id}.json`);
+      const fileContents = fs.readFileSync(scenarioPath, 'utf8');
+      const fullScenario = JSON.parse(fileContents) as Scenario;
+      
+      // Add the basic info if not present in the JSON
+      if (!fullScenario.id) {
+        fullScenario.id = id;
+      }
+      
+      if (!fullScenario.title && MOCK_SCENARIOS[id]) {
+        fullScenario.title = MOCK_SCENARIOS[id].title;
+      }
+      
+      if (!fullScenario.description && MOCK_SCENARIOS[id]) {
+        fullScenario.description = MOCK_SCENARIOS[id].description;
+      }
+      
+      return fullScenario;
+    } catch (fsError) {
+      console.error(`Error loading scenario file for ${id}:`, fsError);
+      // Fall back to mock data if file reading fails
+      return MOCK_SCENARIOS[id] || null;
+    }
   } catch (error) {
     console.error(`Error fetching scenario with ID ${id}:`, error);
     throw new Error('Failed to fetch scenario');

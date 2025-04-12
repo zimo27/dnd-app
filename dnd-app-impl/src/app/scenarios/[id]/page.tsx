@@ -68,7 +68,7 @@ export default function ScenarioPage() {
                 <ul className="space-y-3 text-gray-300">
                   <li className="flex items-start">
                     <span className="mr-2">•</span>
-                    You'll engage in a chat-based conversation where you play the role described in the scenario
+                    You'll create a character with unique attributes and skills
                   </li>
                   <li className="flex items-start">
                     <span className="mr-2">•</span>
@@ -76,16 +76,16 @@ export default function ScenarioPage() {
                   </li>
                   <li className="flex items-start">
                     <span className="mr-2">•</span>
-                    Your decisions will influence the story's direction and outcome
+                    Your character's abilities will influence the story's direction and outcome
                   </li>
                 </ul>
               </div>
 
               <Link 
-                href={`/scenarios/${scenario.id}/chat`}
+                href={`/scenarios/${scenario.id}/character`}
                 className="block w-full text-center bg-gradient-to-r from-purple-500 to-pink-600 text-white font-semibold py-4 px-6 rounded-lg transform transition-all duration-300 hover:from-purple-600 hover:to-pink-700 hover:shadow-lg"
               >
-                Start Chat Adventure
+                Create Character
               </Link>
             </div>
           </div>
