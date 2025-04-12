@@ -41,22 +41,27 @@ export async function getScenarioById(id: string): Promise<Scenario | null> {
     // Try to load the full scenario data from JSON file
     try {
       const scenarioPath = path.join(process.cwd(), 'public', 'scenarios', `${id}.json`);
+      console.log(`Attempting to read scenario file from: ${scenarioPath}`);
+      
       const fileContents = fs.readFileSync(scenarioPath, 'utf8');
-      const fullScenario = JSON.parse(fileContents) as Scenario;
+      console.log(`Successfully read file for scenario: ${id}`);
       
-      // Add the basic info if not present in the JSON
-      if (!fullScenario.id) {
-        fullScenario.id = id;
-      }
+      const jsonData = JSON.parse(fileContents);
+      console.log(`JSON parsed for scenario ${id}:`, jsonData);
       
-      if (!fullScenario.title && MOCK_SCENARIOS[id]) {
-        fullScenario.title = MOCK_SCENARIOS[id].title;
-      }
+      // Map the JSON structure to match the expected Scenario interface
+      const fullScenario: Scenario = {
+        id: id,
+        title: jsonData["Dnd-Scenario"] || (MOCK_SCENARIOS[id]?.title || ''),
+        description: MOCK_SCENARIOS[id]?.description || '',
+        "Dnd-Scenario": jsonData["Dnd-Scenario"],
+        attributes: jsonData.attributes,
+        baseSkills: jsonData.baseSkills,
+        startingPoint: jsonData.startingPoint,
+        playerCustomizations: jsonData.playerCustomizations
+      };
       
-      if (!fullScenario.description && MOCK_SCENARIOS[id]) {
-        fullScenario.description = MOCK_SCENARIOS[id].description;
-      }
-      
+      console.log(`Mapped scenario data:`, fullScenario);
       return fullScenario;
     } catch (fsError) {
       console.error(`Error loading scenario file for ${id}:`, fsError);

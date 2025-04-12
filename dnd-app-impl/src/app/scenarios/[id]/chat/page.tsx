@@ -8,6 +8,7 @@ import { performSkillCheck, getNarrativeForSkill } from '@/lib/api/skills';
 import { Message, GameState, Scenario, SkillCheckResult } from '@/shared/types/game';
 import { useAuth } from '@/lib/auth';
 import Header from '@/components/ui/Header';
+import CharacterImage from '@/components/ui/CharacterImage';
 
 export default function ChatPage() {
   const params = useParams();
@@ -368,6 +369,16 @@ export default function ChatPage() {
         }}
       >
         <div className="max-w-3xl mx-auto space-y-4 pb-4">
+          {/* Character Portrait - Display at the beginning of the chat */}
+          {gameState && scenario && messages.length > 0 && (
+            <div className="mb-6">
+              <CharacterImage 
+                gameState={gameState} 
+                scenarioTitle={scenario.title || ''} 
+              />
+            </div>
+          )}
+          
           {messages.map((message) => (
             <div
               key={message.id}

@@ -23,14 +23,18 @@ export async function fetchScenarios(): Promise<Scenario[]> {
  */
 export async function fetchScenarioById(id: string): Promise<Scenario> {
   try {
-    console.log('Scenario ID requested:', id);
+    console.log(`Client: Requesting scenario with ID: ${id}`);
     const response = await fetch(`/api/scenarios/${id}`);
     
     if (!response.ok) {
-      throw new Error('Failed to fetch scenario');
+      const errorData = await response.json().catch(() => null);
+      console.error(`Error response from server (${response.status}):`, errorData);
+      throw new Error(`Failed to fetch scenario (${response.status}): ${errorData?.message || 'Unknown error'}`);
     }
     
-    return await response.json();
+    const data = await response.json();
+    console.log(`Client: Successfully received scenario data for ID: ${id}`);
+    return data;
   } catch (error) {
     console.error(`Error fetching scenario ${id}:`, error);
     throw error;
@@ -66,4 +70,7 @@ export async function generateChatResponse(
 }
 
 // Export skill-related functions
-export * from './skills'; 
+export * from './skills';
+
+// Export image-related functions
+export * from './images'; 
