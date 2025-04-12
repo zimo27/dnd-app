@@ -5,20 +5,12 @@ import { useAuth } from '@/lib/auth';
 import { useEffect } from 'react';
 
 export default function Header() {
-  const { user, loading, signOut } = useAuth();
+  const { user, loading } = useAuth();
 
   // Debug: Log auth state changes
   useEffect(() => {
     console.log('Header auth state:', { user, loading });
   }, [user, loading]);
-
-  const handleSignOut = async () => {
-    try {
-      await signOut();
-    } catch (error) {
-      console.error('Error signing out:', error);
-    }
-  };
 
   return (
     <nav className="bg-gray-800 border-b border-gray-700">
@@ -32,17 +24,13 @@ export default function Header() {
           </Link>
           <div className="flex items-center space-x-4">
             {user ? (
-              <>
-                <span className="text-gray-300">
-                  {user.email}
-                </span>
-                <button
-                  onClick={handleSignOut}
-                  className="px-4 py-2 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors duration-300"
-                >
-                  Sign Out
-                </button>
-              </>
+              <Link
+                href="/profile"
+                className="flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 transition-all duration-300 hover:shadow-lg"
+                title={user.email || "Profile"}
+              >
+                {user.email ? user.email.charAt(0).toUpperCase() : "P"}
+              </Link>
             ) : (
               <Link
                 href="/login"
