@@ -1,0 +1,57 @@
+# Project-specific ignores
+# Ignore node_modules in subdirectories
+dnd-app-impl/node_modules/
+
+# Next.js build output
+dnd-app-impl/.next/
+dnd-app-impl/out/
+dnd-app-impl/.swc/
+
+# Production build
+dnd-app-impl/build/
+dnd-app-impl/dist/
+
+# Testing
+dnd-app-impl/coverage/
+
+# Local env files (keeping .env.local at root if needed)
+dnd-app-impl/.env*.local
+dnd-app-impl/.env
+dnd-app-impl/.env.development
+dnd-app-impl/.env.test
+dnd-app-impl/.env.production
+
+# TypeScript
+dnd-app-impl/*.tsbuildinfo
+dnd-app-impl/next-env.d.ts
+
+# Debug logs
+dnd-app-impl/npm-debug.log*
+dnd-app-impl/yarn-debug.log*
+dnd-app-impl/yarn-error.log*
+dnd-app-impl/.pnpm-debug.log*
+dnd-app-impl/logs/
+dnd-app-impl/*.log
+
+# Cache
+dnd-app-impl/.npm
+dnd-app-impl/.eslintcache
+dnd-app-impl/.stylelintcache
+
+# Misc
+**/.DS_Store
+**/*.pem
+**/Thumbs.db
+
+# IDE specific files
+**/.idea/
+**/.vscode/*
+!**/.vscode/extensions.json
+!**/.vscode/settings.json
+!**/.vscode/tasks.json
+!**/.vscode/launch.json
+**/*.suo
+**/*.ntvs*
+**/*.njsproj
+**/*.sln
+**/*.sw? 
