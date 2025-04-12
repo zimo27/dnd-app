@@ -20,6 +20,7 @@ dnd-app-impl/.env
 dnd-app-impl/.env.development
 dnd-app-impl/.env.test
 dnd-app-impl/.env.production
+dnd-app-impl/env/
 
 # TypeScript
 dnd-app-impl/*.tsbuildinfo
@@ -55,3 +56,5 @@ dnd-app-impl/.stylelintcache
 **/*.njsproj
 **/*.sln
 **/*.sw? 
+
+.env.local
