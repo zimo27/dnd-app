@@ -20,7 +20,11 @@ A modern web application that brings D&D-style role-playing games to life with c
 
 ## Setup Instructions
 
-1. Clone the repository
+1. Clone the repository:
+   ```
+   git clone <repository-url>
+   cd dnd-app-impl
+   ```
 2. Install dependencies with `npm install`
 3. Copy `.env.local.example` to `.env.local` and fill in your API keys
 4. Run the development server with `npm run dev`
