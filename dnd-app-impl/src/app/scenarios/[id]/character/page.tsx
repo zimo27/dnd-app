@@ -665,16 +665,16 @@ export default function CharacterCreationPage() {
                           const fromFreePoints = getFreePointsAllocated(attr);
                           
                           return (
-                            <div key={attr} className="flex flex-col">
-                              <div className="flex justify-between items-center">
-                                <span className="text-white">{attr}</span>
+                          <div key={attr} className="flex flex-col">
+                            <div className="flex justify-between items-center">
+                              <span className="text-white">{attr}</span>
                                 <div>
-                                  <span className="text-purple-300 font-semibold">{value}</span>
+                              <span className="text-purple-300 font-semibold">{value}</span>
                                   {fromFreePoints > 0 && (
                                     <span className="text-xs text-green-400 ml-1">(+{fromFreePoints})</span>
                                   )}
                                 </div>
-                              </div>
+                            </div>
                               
                               {/* Visual representation of attribute composition */}
                               <div className="w-full bg-gray-600 rounded-full h-2 mt-1 overflow-hidden">

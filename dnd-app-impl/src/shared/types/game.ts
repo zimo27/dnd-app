@@ -21,6 +21,11 @@ export interface GameMessage {
     attribute: string;
     modified_value: number;
   };
+  reward?: {
+    type: 'attribute';
+    attribute: string;
+    amount: number;
+  };
 }
 
 export interface Message {

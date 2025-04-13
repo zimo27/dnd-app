@@ -18,9 +18,17 @@ export async function POST(request: NextRequest) {
     
     const aiResponse = await generateResponse(gameState as GameState, message);
     
-    return NextResponse.json({ 
-      response: aiResponse
-    }, { status: 200 });
+    // Handle both string responses and responses with attribute rewards
+    if (typeof aiResponse === 'string') {
+      return NextResponse.json({ 
+        response: aiResponse
+      }, { status: 200 });
+    } else {
+      return NextResponse.json({ 
+        response: aiResponse
+      }, { status: 200 });
+    }
+    
   } catch (error) {
     console.error('Error in chat API:', error);
     return NextResponse.json(

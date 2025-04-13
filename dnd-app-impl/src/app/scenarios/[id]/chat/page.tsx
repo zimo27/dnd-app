@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { fetchScenarioById, generateChatResponse } from '@/lib/api';
 import { performSkillCheck, getNarrativeForSkill } from '@/lib/api/skills';
+import { applyAttributeReward } from '@/lib/api/rewards';
 import { Message, GameState, Scenario, SkillCheckResult } from '@/shared/types/game';
 import { useAuth } from '@/lib/auth';
 import Header from '@/components/ui/Header';
@@ -82,6 +83,13 @@ export default function ChatPage() {
     initialize();
   }, [params.id, user, router]);
 
+  // Debug effect to track attribute changes
+  useEffect(() => {
+    if (gameState) {
+      console.log("Game state updated, current attributes:", gameState.character_data.attributes);
+    }
+  }, [gameState]);
+
   // Scroll to bottom whenever messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -135,31 +143,145 @@ export default function ChatPage() {
       setGameState(updatedGameState);
       
       // Get AI response
-      const aiResponseText = await generateChatResponse(updatedGameState, userMessage.content);
+      const aiResponse = await generateChatResponse(updatedGameState, userMessage.content);
       
-      // Create AI message
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: aiResponseText,
-        sender: 'ai',
-        timestamp: new Date(),
-      };
+      let aiResponseText: string;
+      let attributeReward: { attribute: string; amount: number; reason: string } | null = null;
       
-      setMessages(prev => [...prev, aiMessage]);
-      
-      // Update game state with AI response
-      setGameState({
-        ...updatedGameState,
-        history: [
-          ...updatedGameState.history,
-          {
-            message: aiResponseText,
-            sender: 'system' as 'user' | 'system',
-            timestamp: new Date().toISOString(),
-          },
-        ],
-        updated_at: new Date().toISOString(),
-      });
+      // Check if the response includes an attribute reward
+      if (typeof aiResponse === 'object' && aiResponse.attributeReward) {
+        // Handle attribute reward
+        console.group('🏆 ATTRIBUTE REWARD RECEIVED');
+        console.log('Reward details:', aiResponse.attributeReward);
+        
+        aiResponseText = aiResponse.text;
+        attributeReward = aiResponse.attributeReward as { 
+          attribute: string; 
+          amount: number; 
+          reason: string;
+        };
+        
+        // Log current attributes before update
+        console.log('Current attributes before update:', {
+          ...updatedGameState.character_data.attributes
+        });
+        
+        // Apply the attribute reward
+        const rewardResult = await applyAttributeReward(updatedGameState, {
+          attribute: attributeReward.attribute,
+          amount: attributeReward.amount
+        });
+        
+        console.log('API response from reward application:', rewardResult);
+        
+        // Deep clone the updated gameState to avoid reference issues
+        const newGameState = JSON.parse(JSON.stringify(rewardResult.gameState)) as GameState;
+        
+        // Compare the attribute values to confirm update
+        console.log('Attribute comparison:', {
+          attribute: attributeReward.attribute,
+          before: updatedGameState.character_data.attributes[attributeReward.attribute] || 0,
+          after: newGameState.character_data.attributes[attributeReward.attribute] || 0,
+          difference: (newGameState.character_data.attributes[attributeReward.attribute] || 0) - 
+                     (updatedGameState.character_data.attributes[attributeReward.attribute] || 0)
+        });
+        
+        // Add reward notification to messages
+        const rewardMessage: Message = {
+          id: (Date.now() + 2).toString(),
+          content: `🏆 You've earned a reward! Your ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}. ${attributeReward.reason}`,
+          sender: 'ai',
+          timestamp: new Date(),
+        };
+        
+        // Create AI message
+        const aiMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          content: typeof aiResponseText === 'string' ? aiResponseText : JSON.stringify(aiResponseText),
+          sender: 'ai',
+          timestamp: new Date(),
+        };
+        
+        // Add both messages
+        setMessages(prev => [...prev, aiMessage, rewardMessage]);
+        
+        // Create a new gameState object with the updated attributes and history
+        const finalGameState = {
+          ...newGameState,
+          history: [
+            ...newGameState.history,
+            {
+              message: aiResponseText,
+              sender: 'system' as 'user' | 'system',
+              timestamp: new Date().toISOString(),
+            },
+            {
+              message: rewardMessage.content,
+              sender: 'system' as 'user' | 'system',
+              timestamp: new Date().toISOString(),
+              reward: {
+                type: 'attribute' as 'attribute',
+                attribute: attributeReward.attribute,
+                amount: attributeReward.amount
+              }
+            }
+          ],
+          updated_at: new Date().toISOString(),
+        };
+        
+        // Log the final gameState
+        console.log('Final gameState after reward:', {
+          attributes: finalGameState.character_data.attributes,
+          attribute: attributeReward.attribute,
+          value: finalGameState.character_data.attributes[attributeReward.attribute]
+        });
+        console.groupEnd();
+        
+        // Save the game state
+        setGameState(finalGameState);
+        
+        // Immediately save to localStorage to make sure it persists
+        localStorage.setItem(`gameState_${params.id}`, JSON.stringify(finalGameState));
+        
+        // Additional verification after saving to localStorage
+        setTimeout(() => {
+          const savedState = localStorage.getItem(`gameState_${params.id}`);
+          if (savedState && attributeReward) {
+            const parsedState = JSON.parse(savedState) as GameState;
+            console.log('VERIFICATION - Value in localStorage:', {
+              attribute: attributeReward.attribute,
+              value: parsedState.character_data.attributes[attributeReward.attribute]
+            });
+          }
+        }, 100);
+      } else {
+        // Handle regular response
+        aiResponseText = typeof aiResponse === 'string' ? aiResponse : aiResponse.text;
+        
+        // Create AI message
+        const aiMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          content: typeof aiResponseText === 'string' ? aiResponseText : JSON.stringify(aiResponseText),
+          sender: 'ai',
+          timestamp: new Date(),
+        };
+        
+        setMessages(prev => [...prev, aiMessage]);
+        
+        // Update game state with AI response
+        setGameState({
+          ...updatedGameState,
+          history: [
+            ...updatedGameState.history,
+            {
+              message: aiResponseText,
+              sender: 'system' as 'user' | 'system',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          updated_at: new Date().toISOString(),
+        });
+      }
       
     } catch (error) {
       console.error('Error getting AI response:', error);
@@ -460,29 +582,32 @@ export default function ChatPage() {
                 className={`max-w-[80%] rounded-lg p-4 ${
                   message.sender === 'user'
                     ? 'bg-purple-600 text-white'
-                    : message.content.includes('[Skill Check:')
+                    : typeof message.content === 'string' && message.content.includes('[Skill Check:')
                       ? 'bg-gray-800 border border-indigo-500 text-gray-200'
-                      : 'bg-gray-700 text-gray-200'
+                      : typeof message.content === 'string' && message.content.includes('🏆 You\'ve earned a reward!')
+                        ? 'bg-gradient-to-r from-amber-500 to-amber-700 text-white'
+                        : 'bg-gray-700 text-gray-200'
                 }`}
               >
-                {message.content.includes('[Skill Check:') ? (
+                {typeof message.content === 'string' && message.content.includes('[Skill Check:') ? (
                   <div>
                     {/* Parse and display skill check message with better formatting */}
                     {(() => {
                       // Extract skill name, result, and roll details from message
-                      const skillMatch = message.content.match(/\[Skill Check: ([^\]]+)\]/);
-                      const successMatch = message.content.includes('successfully');
+                      const content = message.content as string;
+                      const skillMatch = content.match(/\[Skill Check: ([^\]]+)\]/);
+                      const successMatch = content.includes('successfully');
                       const skillName = skillMatch ? skillMatch[1] : 'Unknown Skill';
                       
                       // Extract numbers using regex
-                      const rollMatch = message.content.match(/Rolled (\d+) \+ (\d+) = (\d+) vs DC (\d+)/);
+                      const rollMatch = content.match(/Rolled (\d+) \+ (\d+) = (\d+) vs DC (\d+)/);
                       const roll = rollMatch ? rollMatch[1] : '?';
                       const bonus = rollMatch ? rollMatch[2] : '?';
                       const total = rollMatch ? rollMatch[3] : '?';
                       const dc = rollMatch ? rollMatch[4] : '?';
                       
                       // Get narrative part
-                      const narrativePart = message.content.split(') ')[1] || '';
+                      const narrativePart = content.split(') ')[1] || '';
                       
                       return (
                         <>
@@ -514,7 +639,11 @@ export default function ChatPage() {
                     })()}
                   </div>
                 ) : (
-                  <p className="text-sm md:text-base">{message.content}</p>
+                  <p className="text-sm md:text-base">{
+                    typeof message.content === 'object' 
+                      ? JSON.stringify(message.content) 
+                      : message.content
+                  }</p>
                 )}
               </div>
             </div>
@@ -528,7 +657,7 @@ export default function ChatPage() {
                   <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
                   <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
                   <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                  <span className="text-sm text-gray-400 ml-2">AI is thinking...</span>
+                  <span className="text-sm text-gray-400 ml-2"></span>
                 </div>
               </div>
             </div>

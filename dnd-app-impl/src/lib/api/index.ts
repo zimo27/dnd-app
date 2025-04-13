@@ -47,7 +47,7 @@ export async function fetchScenarioById(id: string): Promise<Scenario> {
 export async function generateChatResponse(
   gameState: GameState, 
   message: string
-): Promise<string> {
+): Promise<string | { text: string; attributeReward?: { attribute: string; amount: number; reason: string } }> {
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -73,4 +73,7 @@ export async function generateChatResponse(
 export * from './skills';
 
 // Export image-related functions
-export * from './images'; 
+export * from './images';
+
+// Export reward-related functions
+export * from './rewards'; 
