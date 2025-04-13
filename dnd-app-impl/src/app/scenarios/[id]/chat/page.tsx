@@ -21,8 +21,11 @@ export default function ChatPage() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [showStats, setShowStats] = useState(false);
+  // Note: skillCheckResult state is maintained for game logic but the display is now integrated into chat messages
   const [skillCheckResult, setSkillCheckResult] = useState<SkillCheckResult | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isFirstInteraction, setIsFirstInteraction] = useState(true);
+  const [isCharacterImageLoaded, setIsCharacterImageLoaded] = useState(false);
 
   // Initialize game state and welcome message
   useEffect(() => {
@@ -94,6 +97,14 @@ export default function ChatPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim() || isLoading || !gameState) return;
+
+    // If this is the first interaction and the image is not loaded yet, don't proceed
+    if (isFirstInteraction && !isCharacterImageLoaded) return;
+
+    // No longer the first interaction
+    if (isFirstInteraction) {
+      setIsFirstInteraction(false);
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -171,6 +182,14 @@ export default function ChatPage() {
   const handleUseSkill = async (skillName: string) => {
     if (!gameState || !scenario || isLoading) return;
     
+    // If this is the first interaction and the image is not loaded yet, don't proceed
+    if (isFirstInteraction && !isCharacterImageLoaded) return;
+    
+    // No longer the first interaction
+    if (isFirstInteraction) {
+      setIsFirstInteraction(false);
+    }
+    
     const skill = scenario.baseSkills?.[skillName];
     if (!skill) return;
     
@@ -181,23 +200,49 @@ export default function ChatPage() {
       const result = await performSkillCheck(gameState, skillName);
       setSkillCheckResult(result);
       
-      // Add skill check message
+      // Add skill check message - as a user message, not AI
       const skillMessage: Message = {
         id: Date.now().toString(),
-        content: `[Skill Check: ${skillName}] ${result.narrativeResult} (Rolled ${result.roll} + ${result.attributeValue} = ${result.roll + result.attributeValue} vs DC ${result.difficulty})`,
-        sender: 'ai',
+        content: `I'll use my ${skillName} skill.`,
+        sender: 'user',
         timestamp: new Date(),
       };
       
       setMessages(prev => [...prev, skillMessage]);
       
-      // Update game state with skill check
+      // Update game state with the user's skill selection
       const updatedGameState: GameState = {
         ...gameState,
         history: [
           ...gameState.history,
           {
             message: skillMessage.content,
+            sender: 'user' as 'user' | 'system',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        updated_at: new Date().toISOString(),
+      };
+      
+      setGameState(updatedGameState);
+      
+      // Now add the skill check result as an AI message
+      const skillResultMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: `[Skill Check: ${skillName}] ${result.narrativeResult} (Rolled ${result.roll} + ${result.attributeValue} = ${result.roll + result.attributeValue} vs DC ${result.difficulty})`,
+        sender: 'ai',
+        timestamp: new Date(),
+      };
+      
+      setMessages(prev => [...prev, skillResultMessage]);
+      
+      // Update game state with the skill check result
+      const gameStateWithSkillCheck: GameState = {
+        ...updatedGameState,
+        history: [
+          ...updatedGameState.history,
+          {
+            message: skillResultMessage.content,
             sender: 'system' as 'user' | 'system',
             timestamp: new Date().toISOString(),
             roll: {
@@ -210,14 +255,14 @@ export default function ChatPage() {
         updated_at: new Date().toISOString(),
       };
       
-      setGameState(updatedGameState);
+      setGameState(gameStateWithSkillCheck);
       
       // Get narrative continuation based on skill check
-      const narrativeResponse = await getNarrativeForSkill(updatedGameState, result);
+      const narrativeResponse = await getNarrativeForSkill(gameStateWithSkillCheck, result);
       
       // Create AI message with narrative continuation
       const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
+        id: (Date.now() + 2).toString(),
         content: narrativeResponse,
         sender: 'ai',
         timestamp: new Date(),
@@ -227,9 +272,9 @@ export default function ChatPage() {
       
       // Update game state with AI narrative response
       setGameState({
-        ...updatedGameState,
+        ...gameStateWithSkillCheck,
         history: [
-          ...updatedGameState.history,
+          ...gameStateWithSkillCheck.history,
           {
             message: narrativeResponse,
             sender: 'system' as 'user' | 'system',
@@ -341,18 +386,29 @@ export default function ChatPage() {
               <div className="mt-3">
                 <h4 className="text-sm font-medium text-gray-300 mb-2">Skills</h4>
                 <div className="flex flex-wrap gap-2">
-                  {Object.entries(gameState.character_data.skills || {})
+                  {gameState && scenario && Object.entries(gameState.character_data.skills || {})
                     .filter(([_, isAvailable]) => isAvailable)
-                    .map(([skillName, _]) => (
-                      <button
-                        key={skillName}
-                        onClick={() => handleUseSkill(skillName)}
-                        className="bg-gray-600 hover:bg-gray-500 text-white text-xs px-2 py-1 rounded transition-colors duration-300"
-                        title={scenario?.baseSkills?.[skillName]?.description || skillName}
-                      >
-                        {skillName}
-                      </button>
-                    ))}
+                    .map(([skillName, _]) => {
+                      const skill = scenario.baseSkills?.[skillName];
+                      const attributeValue = gameState.character_data.attributes[skill?.attribute || ''] || 0;
+                      
+                      return (
+                        <button
+                          key={skillName}
+                          onClick={() => handleUseSkill(skillName)}
+                          disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded)}
+                          className={`
+                            px-3 py-1.5 rounded text-sm flex items-center whitespace-nowrap
+                            ${isLoading || (isFirstInteraction && !isCharacterImageLoaded) ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-500'}
+                            transition-colors duration-300
+                          `}
+                          title={scenario.baseSkills?.[skillName]?.description || skillName}
+                        >
+                          <span className="mr-1">{skillName}</span>
+                          <span className="text-xs bg-gray-700 px-1.5 py-0.5 rounded">+{attributeValue}</span>
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
             </div>
@@ -375,7 +431,23 @@ export default function ChatPage() {
               <CharacterImage 
                 gameState={gameState} 
                 scenarioTitle={scenario.title || ''} 
+                onLoadComplete={() => {
+                  setIsCharacterImageLoaded(true);
+                  console.log("Character image loaded successfully");
+                }}
               />
+              
+              {/* First interaction loading message */}
+              {isFirstInteraction && !isCharacterImageLoaded && (
+                <div className="mt-4 text-center">
+                  <div className="animate-pulse text-purple-400 font-medium">
+                    Generating your character image...
+                  </div>
+                  <p className="text-gray-400 text-sm mt-2">
+                    You'll be able to interact once the image has loaded
+                  </p>
+                </div>
+              )}
             </div>
           )}
           
@@ -388,10 +460,62 @@ export default function ChatPage() {
                 className={`max-w-[80%] rounded-lg p-4 ${
                   message.sender === 'user'
                     ? 'bg-purple-600 text-white'
-                    : 'bg-gray-700 text-gray-200'
+                    : message.content.includes('[Skill Check:')
+                      ? 'bg-gray-800 border border-indigo-500 text-gray-200'
+                      : 'bg-gray-700 text-gray-200'
                 }`}
               >
-                <p className="text-sm md:text-base">{message.content}</p>
+                {message.content.includes('[Skill Check:') ? (
+                  <div>
+                    {/* Parse and display skill check message with better formatting */}
+                    {(() => {
+                      // Extract skill name, result, and roll details from message
+                      const skillMatch = message.content.match(/\[Skill Check: ([^\]]+)\]/);
+                      const successMatch = message.content.includes('successfully');
+                      const skillName = skillMatch ? skillMatch[1] : 'Unknown Skill';
+                      
+                      // Extract numbers using regex
+                      const rollMatch = message.content.match(/Rolled (\d+) \+ (\d+) = (\d+) vs DC (\d+)/);
+                      const roll = rollMatch ? rollMatch[1] : '?';
+                      const bonus = rollMatch ? rollMatch[2] : '?';
+                      const total = rollMatch ? rollMatch[3] : '?';
+                      const dc = rollMatch ? rollMatch[4] : '?';
+                      
+                      // Get narrative part
+                      const narrativePart = message.content.split(') ')[1] || '';
+                      
+                      return (
+                        <>
+                          <div className="flex items-center mb-2">
+                            <span className={`font-bold mr-2 ${successMatch ? 'text-green-400' : 'text-red-400'}`}>
+                              {successMatch ? 'SUCCESS!' : 'FAILED!'}
+                            </span>
+                            <span className="text-gray-300">{skillName} Check</span>
+                          </div>
+                          <div className="flex space-x-3 text-xs mb-2">
+                            <div>
+                              <span className="text-gray-400">Roll:</span> {roll}
+                            </div>
+                            <div>
+                              <span className="text-gray-400">Bonus:</span> +{bonus}
+                            </div>
+                            <div>
+                              <span className="text-gray-400">Total:</span> {total}
+                            </div>
+                            <div>
+                              <span className="text-gray-400">DC:</span> {dc}
+                            </div>
+                          </div>
+                          <div className="mt-2 text-sm border-t border-gray-700 pt-2">
+                            {narrativePart}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  <p className="text-sm md:text-base">{message.content}</p>
+                )}
               </div>
             </div>
           ))}
@@ -405,38 +529,6 @@ export default function ChatPage() {
                   <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
                   <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
                   <span className="text-sm text-gray-400 ml-2">AI is thinking...</span>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {/* Skill check result */}
-          {skillCheckResult && !isLoading && (
-            <div className="flex justify-center">
-              <div className={`bg-gray-800 text-gray-200 rounded-lg p-3 text-sm ${
-                skillCheckResult.success ? 'border border-green-500' : 'border border-red-500'
-              }`}>
-                <div className="flex items-center mb-1">
-                  <span className={`font-bold mr-2 ${
-                    skillCheckResult.success ? 'text-green-400' : 'text-red-400'
-                  }`}>
-                    {skillCheckResult.success ? 'SUCCESS!' : 'FAILED!'}
-                  </span>
-                  <span className="text-gray-400">{skillCheckResult.skillName}</span>
-                </div>
-                <div className="flex space-x-3 text-xs">
-                  <div>
-                    <span className="text-gray-400">Roll:</span> {skillCheckResult.roll}
-                  </div>
-                  <div>
-                    <span className="text-gray-400">Bonus:</span> +{skillCheckResult.attributeValue}
-                  </div>
-                  <div>
-                    <span className="text-gray-400">Total:</span> {skillCheckResult.roll + skillCheckResult.attributeValue}
-                  </div>
-                  <div>
-                    <span className="text-gray-400">DC:</span> {skillCheckResult.difficulty}
-                  </div>
                 </div>
               </div>
             </div>
@@ -462,7 +554,7 @@ export default function ChatPage() {
                 </button>
               </div>
               <div className="flex flex-wrap gap-2 pb-2 overflow-x-auto">
-                {Object.entries(gameState.character_data.skills || {})
+                {gameState && scenario && Object.entries(gameState.character_data.skills || {})
                   .filter(([_, isAvailable]) => isAvailable)
                   .map(([skillName, _]) => {
                     const skill = scenario.baseSkills?.[skillName];
@@ -472,13 +564,13 @@ export default function ChatPage() {
                       <button
                         key={skillName}
                         onClick={() => handleUseSkill(skillName)}
-                        disabled={isLoading}
+                        disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded)}
                         className={`
                           px-3 py-1.5 rounded text-sm flex items-center whitespace-nowrap
-                          ${isLoading ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-500'}
+                          ${isLoading || (isFirstInteraction && !isCharacterImageLoaded) ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-500'}
                           transition-colors duration-300
                         `}
-                        title={skill?.description || skillName}
+                        title={scenario.baseSkills?.[skillName]?.description || skillName}
                       >
                         <span className="mr-1">{skillName}</span>
                         <span className="text-xs bg-gray-700 px-1.5 py-0.5 rounded">+{attributeValue}</span>
@@ -494,17 +586,19 @@ export default function ChatPage() {
               type="text"
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
-              placeholder="Type your message..."
+              placeholder={isFirstInteraction && !isCharacterImageLoaded ? "Waiting for character image to load..." : "Type your message..."}
               className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
-              disabled={isLoading}
+              disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded)}
             />
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded)}
               className="bg-gradient-to-r from-purple-500 to-pink-600 text-white px-6 py-2 rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all duration-300 disabled:opacity-50"
             >
               {isLoading ? (
                 <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+              ) : isFirstInteraction && !isCharacterImageLoaded ? (
+                <div className="animate-pulse">Loading...</div>
               ) : (
                 'Send'
               )}

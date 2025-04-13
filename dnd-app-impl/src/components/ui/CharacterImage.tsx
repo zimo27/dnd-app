@@ -8,9 +8,10 @@ import { generateCharacterImage } from '@/lib/api/images';
 interface CharacterImageProps {
   gameState: GameState;
   scenarioTitle: string;
+  onLoadComplete?: () => void;
 }
 
-export default function CharacterImage({ gameState, scenarioTitle }: CharacterImageProps) {
+export default function CharacterImage({ gameState, scenarioTitle, onLoadComplete }: CharacterImageProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,6 +24,8 @@ export default function CharacterImage({ gameState, scenarioTitle }: CharacterIm
       if (cachedImage) {
         setImageUrl(cachedImage);
         setIsLoading(false);
+        // Notify parent component that image is loaded
+        onLoadComplete?.();
         return;
       }
       
@@ -38,11 +41,13 @@ export default function CharacterImage({ gameState, scenarioTitle }: CharacterIm
         setError('Could not generate character image');
       } finally {
         setIsLoading(false);
+        // Notify parent component that image is loaded (or failed to load)
+        onLoadComplete?.();
       }
     }
 
     loadCharacterImage();
-  }, [gameState, scenarioTitle]);
+  }, [gameState, scenarioTitle, onLoadComplete]);
 
   if (isLoading) {
     return (
