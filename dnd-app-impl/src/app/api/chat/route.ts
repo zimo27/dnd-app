@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generateResponse } from '@/backend/services/ai/openai';
+import { generateResponse, checkForRewards } from '@/backend/services/ai/openai';
 import { GameState } from '@/shared/types/game';
 
 /**
@@ -7,28 +7,47 @@ import { GameState } from '@/shared/types/game';
  */
 export async function POST(request: NextRequest) {
   try {
-    const { gameState, message } = await request.json();
+    const { gameState, message, storyStructure } = await request.json();
     
-    if (!gameState || !message) {
-      return NextResponse.json(
-        { error: 'Missing required parameters' },
-        { status: 400 }
-      );
+    // if (!gameState || !message) {
+    //   return NextResponse.json(
+    //     { error: 'Missing required parameters' },
+    //     { status: 400 }
+    //   );
+    // }
+    
+    // Generate the AI's narrative response
+    const aiResponse = await generateResponse(gameState as GameState, message, storyStructure);
+    console.log('OpenAI narrative response generated:', { length: aiResponse.length });
+    
+    // Make a separate call to check for rewards
+    const rewardResult = await checkForRewards(gameState as GameState, message, aiResponse);
+    console.log('Reward check result:', 
+      rewardResult.attributeReward 
+        ? { 
+            hasReward: true, 
+            attribute: rewardResult.attributeReward.attribute,
+            amount: rewardResult.attributeReward.amount,
+            isAchievement: rewardResult.attributeReward.achievement || false,
+            achievementTitle: rewardResult.attributeReward.achievementTitle || null
+          }
+        : { hasReward: false }
+    );
+    
+    // If a reward was generated, return both the response and the reward
+    if (rewardResult.attributeReward) {
+      return NextResponse.json({
+        response: {
+          text: aiResponse,
+          attributeReward: rewardResult.attributeReward
+        }
+      }, { status: 200 });
     }
     
-    const aiResponse = await generateResponse(gameState as GameState, message);
-    
-    // Handle both string responses and responses with attribute rewards
-    if (typeof aiResponse === 'string') {
-      return NextResponse.json({ 
-        response: aiResponse
-      }, { status: 200 });
-    } else {
-      return NextResponse.json({ 
-        response: aiResponse
-      }, { status: 200 });
-    }
-    
+    // Otherwise, just return the narrative response
+    return NextResponse.json({ 
+      response: aiResponse
+    }, { status: 200 });
   } catch (error) {
     console.error('Error in chat API:', error);
     return NextResponse.json(

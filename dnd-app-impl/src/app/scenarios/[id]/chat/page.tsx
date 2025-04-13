@@ -3,13 +3,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { fetchScenarioById, generateChatResponse } from '@/lib/api';
+import { fetchScenarioById, generateChatResponse, generateStoryStructure } from '@/lib/api';
 import { performSkillCheck, getNarrativeForSkill } from '@/lib/api/skills';
-import { applyAttributeReward } from '@/lib/api/rewards';
+import { applyAttributeReward, checkRewardsForSkill } from '@/lib/api/rewards';
 import { Message, GameState, Scenario, SkillCheckResult } from '@/shared/types/game';
 import { useAuth } from '@/lib/auth';
 import Header from '@/components/ui/Header';
 import CharacterImage from '@/components/ui/CharacterImage';
+import { checkForRewards } from '@/backend/services/ai/openai';
 
 export default function ChatPage() {
   const params = useParams();
@@ -27,6 +28,9 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isFirstInteraction, setIsFirstInteraction] = useState(true);
   const [isCharacterImageLoaded, setIsCharacterImageLoaded] = useState(false);
+  const [storyStructure, setStoryStructure] = useState<{ events: string[], endingState: string } | null>(null);
+  const [showStoryStructure, setShowStoryStructure] = useState(false);
+  const [imageLoadTimeout, setImageLoadTimeout] = useState(false);
 
   // Initialize game state and welcome message
   useEffect(() => {
@@ -43,6 +47,13 @@ export default function ChatPage() {
         if (savedGameState) {
           newGameState = JSON.parse(savedGameState);
           console.log('Loaded saved game state:', newGameState);
+          
+          // Try to load saved story structure
+          const savedStoryStructure = localStorage.getItem(`storyStructure_${params.id}`);
+          if (savedStoryStructure) {
+            setStoryStructure(JSON.parse(savedStoryStructure));
+            console.log('Loaded saved story structure:', JSON.parse(savedStoryStructure));
+          }
         } else {
           // Redirect to character creation if no saved game state
           router.push(`/scenarios/${params.id}/character`);
@@ -51,16 +62,45 @@ export default function ChatPage() {
         
         setGameState(newGameState);
         
+        // Generate story structure if it doesn't exist
+        if (!localStorage.getItem(`storyStructure_${params.id}`)) {
+          try {
+            console.log('Generating story structure...');
+            setInitialLoading(true);
+            const structure = await generateStoryStructure(newGameState);
+            setStoryStructure(structure);
+            localStorage.setItem(`storyStructure_${params.id}`, JSON.stringify(structure));
+            console.log('Story structure generated and saved:', structure);
+          } catch (error) {
+            console.error('Error generating story structure:', error);
+          }
+        }
+        
         // Add initial system message if there's no history
         if (newGameState.history.length === 0) {
-          setMessages([
-            {
-              id: '1',
-              content: `Welcome to "${scenarioData.title}"! I am your AI game master. ${scenarioData.startingPoint || 'How would you like to begin your adventure?'}`,
+          const welcomeMessage: Message = {
+            id: '1',
+            content: `Welcome to "${scenarioData.title}"! I am your AI game master. ${scenarioData.startingPoint || 'How would you like to begin your adventure?'}`,
+            sender: 'ai',
+            timestamp: new Date(),
+          };
+
+          const introMessages: Message[] = [welcomeMessage];
+          
+          // If we just generated a story structure, add an introductory message
+          if (!localStorage.getItem(`storyStructure_${params.id}_introduced`) && storyStructure) {
+            const storyIntroMessage: Message = {
+              id: '2',
+              content: `I've prepared a narrative arc for our adventure with 3 key events leading to an exciting conclusion. Click "Show Game Plan" at the top to see it at any time. Let me know when you're ready to begin!`,
               sender: 'ai',
               timestamp: new Date(),
-            },
-          ]);
+            };
+            
+            introMessages.push(storyIntroMessage);
+            localStorage.setItem(`storyStructure_${params.id}_introduced`, 'true');
+          }
+          
+          setMessages(introMessages);
         } else {
           // Convert history to messages
           const historyMessages = newGameState.history.map((historyItem, index) => ({
@@ -82,6 +122,19 @@ export default function ChatPage() {
 
     initialize();
   }, [params.id, user, router]);
+
+  // Add a timeout for image loading to allow gameplay even if image generation fails
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!isCharacterImageLoaded) {
+        console.log("Image load timeout reached - allowing interaction");
+        setImageLoadTimeout(true);
+        setIsCharacterImageLoaded(true); // Force enable interaction
+      }
+    }, 15000); // 15 seconds timeout
+    
+    return () => clearTimeout(timer);
+  }, [isCharacterImageLoaded]);
 
   // Debug effect to track attribute changes
   useEffect(() => {
@@ -142,11 +195,18 @@ export default function ChatPage() {
       
       setGameState(updatedGameState);
       
-      // Get AI response
-      const aiResponse = await generateChatResponse(updatedGameState, userMessage.content);
+      // Get AI response with story structure guidance
+      const aiResponse = await generateChatResponse(
+        updatedGameState,
+        userMessage.content,
+        storyStructure || undefined
+      );
+      
+      // Add debug log to see raw response from API
+      console.log('Raw AI response from API:', aiResponse);
       
       let aiResponseText: string;
-      let attributeReward: { attribute: string; amount: number; reason: string } | null = null;
+      let attributeReward: { attribute: string; amount: number; reason: string; achievement?: boolean; achievementTitle?: string } | null = null;
       
       // Check if the response includes an attribute reward
       if (typeof aiResponse === 'object' && aiResponse.attributeReward) {
@@ -154,114 +214,176 @@ export default function ChatPage() {
         console.group('🏆 ATTRIBUTE REWARD RECEIVED');
         console.log('Reward details:', aiResponse.attributeReward);
         
-        aiResponseText = aiResponse.text;
+        // Properly extract the text field from the response object
+        aiResponseText = typeof aiResponse.text === 'string' ? aiResponse.text : JSON.stringify(aiResponse.text);
         attributeReward = aiResponse.attributeReward as { 
           attribute: string; 
           amount: number; 
           reason: string;
+          achievement?: boolean;
+          achievementTitle?: string;
         };
+        
+        // Check if the attribute exists in the character's attributes, if not, add it
+        if (!(attributeReward.attribute in updatedGameState.character_data.attributes)) {
+          console.log(`Adding new attribute: ${attributeReward.attribute}`);
+          // Create a copy of the gameState to avoid direct mutation
+          const newGameState = { ...updatedGameState };
+          newGameState.character_data = { 
+            ...newGameState.character_data,
+            attributes: { 
+              ...newGameState.character_data.attributes,
+              [attributeReward.attribute]: 0 
+            }
+          };
+          setGameState(newGameState);
+          // Use the updated state for further processing
+          updatedGameState.character_data.attributes[attributeReward.attribute] = 0;
+        }
         
         // Log current attributes before update
         console.log('Current attributes before update:', {
           ...updatedGameState.character_data.attributes
         });
         
-        // Apply the attribute reward
-        const rewardResult = await applyAttributeReward(updatedGameState, {
-          attribute: attributeReward.attribute,
-          amount: attributeReward.amount
-        });
-        
-        console.log('API response from reward application:', rewardResult);
-        
-        // Deep clone the updated gameState to avoid reference issues
-        const newGameState = JSON.parse(JSON.stringify(rewardResult.gameState)) as GameState;
-        
-        // Compare the attribute values to confirm update
-        console.log('Attribute comparison:', {
-          attribute: attributeReward.attribute,
-          before: updatedGameState.character_data.attributes[attributeReward.attribute] || 0,
-          after: newGameState.character_data.attributes[attributeReward.attribute] || 0,
-          difference: (newGameState.character_data.attributes[attributeReward.attribute] || 0) - 
-                     (updatedGameState.character_data.attributes[attributeReward.attribute] || 0)
-        });
-        
-        // Add reward notification to messages
-        const rewardMessage: Message = {
-          id: (Date.now() + 2).toString(),
-          content: `🏆 You've earned a reward! Your ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}. ${attributeReward.reason}`,
-          sender: 'ai',
-          timestamp: new Date(),
-        };
-        
-        // Create AI message
-        const aiMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          content: typeof aiResponseText === 'string' ? aiResponseText : JSON.stringify(aiResponseText),
-          sender: 'ai',
-          timestamp: new Date(),
-        };
-        
-        // Add both messages
-        setMessages(prev => [...prev, aiMessage, rewardMessage]);
-        
-        // Create a new gameState object with the updated attributes and history
-        const finalGameState = {
-          ...newGameState,
-          history: [
-            ...newGameState.history,
-            {
-              message: aiResponseText,
-              sender: 'system' as 'user' | 'system',
-              timestamp: new Date().toISOString(),
-            },
-            {
-              message: rewardMessage.content,
-              sender: 'system' as 'user' | 'system',
-              timestamp: new Date().toISOString(),
-              reward: {
-                type: 'attribute' as 'attribute',
-                attribute: attributeReward.attribute,
-                amount: attributeReward.amount
-              }
-            }
-          ],
-          updated_at: new Date().toISOString(),
-        };
-        
-        // Log the final gameState
-        console.log('Final gameState after reward:', {
-          attributes: finalGameState.character_data.attributes,
-          attribute: attributeReward.attribute,
-          value: finalGameState.character_data.attributes[attributeReward.attribute]
-        });
-        console.groupEnd();
-        
-        // Save the game state
-        setGameState(finalGameState);
-        
-        // Immediately save to localStorage to make sure it persists
-        localStorage.setItem(`gameState_${params.id}`, JSON.stringify(finalGameState));
-        
-        // Additional verification after saving to localStorage
-        setTimeout(() => {
-          const savedState = localStorage.getItem(`gameState_${params.id}`);
-          if (savedState && attributeReward) {
-            const parsedState = JSON.parse(savedState) as GameState;
-            console.log('VERIFICATION - Value in localStorage:', {
-              attribute: attributeReward.attribute,
-              value: parsedState.character_data.attributes[attributeReward.attribute]
-            });
+        try {
+          // Apply the attribute reward
+          const rewardResult = await applyAttributeReward(updatedGameState, {
+            attribute: attributeReward.attribute,
+            amount: attributeReward.amount
+          });
+          
+          console.log('API response from reward application:', rewardResult);
+          
+          // Deep clone the updated gameState to avoid reference issues
+          const newGameState = JSON.parse(JSON.stringify(rewardResult.gameState)) as GameState;
+          
+          // Compare the attribute values to confirm update
+          console.log('Attribute comparison:', {
+            attribute: attributeReward.attribute,
+            before: updatedGameState.character_data.attributes[attributeReward.attribute] || 0,
+            after: newGameState.character_data.attributes[attributeReward.attribute] || 0,
+            difference: (newGameState.character_data.attributes[attributeReward.attribute] || 0) - 
+                      (updatedGameState.character_data.attributes[attributeReward.attribute] || 0)
+          });
+          
+          // Add reward notification to messages
+          let rewardMessage: Message;
+          
+          if (attributeReward.achievement) {
+            // Format special achievement reward
+            rewardMessage = {
+              id: (Date.now() + 2).toString(),
+              content: `🏆 ACHIEVEMENT UNLOCKED: "${attributeReward.achievementTitle || 'Achievement'}" 🏆\n\nYour ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}! ${attributeReward.reason}`,
+              sender: 'ai',
+              timestamp: new Date(),
+            };
+          } else {
+            // Regular reward format
+            rewardMessage = {
+              id: (Date.now() + 2).toString(),
+              content: `🏆 You've earned a reward! Your ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}. ${attributeReward.reason}`,
+              sender: 'ai',
+              timestamp: new Date(),
+            };
           }
-        }, 100);
+          
+          // Create AI message
+          const aiMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            content: aiResponseText,
+            sender: 'ai',
+            timestamp: new Date(),
+          };
+          
+          // Add both messages
+          setMessages(prev => [...prev, aiMessage, rewardMessage]);
+          
+          // Create a new gameState object with the updated attributes and history
+          const finalGameState = {
+            ...newGameState,
+            history: [
+              ...newGameState.history,
+              {
+                message: aiResponseText,
+                sender: 'system' as 'user' | 'system',
+                timestamp: new Date().toISOString(),
+              },
+              {
+                message: rewardMessage.content,
+                sender: 'system' as 'user' | 'system',
+                timestamp: new Date().toISOString(),
+                reward: {
+                  type: attributeReward.achievement ? 'achievement' as 'attribute' | 'achievement' : 'attribute' as 'attribute' | 'achievement',
+                  attribute: attributeReward.attribute,
+                  amount: attributeReward.amount,
+                  ...(attributeReward.achievement ? { achievementTitle: attributeReward.achievementTitle } : {})
+                }
+              }
+            ],
+            updated_at: new Date().toISOString(),
+          };
+          
+          // Log the final gameState
+          console.log('Final gameState after reward:', {
+            attributes: finalGameState.character_data.attributes,
+            attribute: attributeReward.attribute,
+            value: finalGameState.character_data.attributes[attributeReward.attribute]
+          });
+          console.groupEnd();
+          
+          // Save the game state
+          setGameState(finalGameState);
+          
+          // Immediately save to localStorage to make sure it persists
+          localStorage.setItem(`gameState_${params.id}`, JSON.stringify(finalGameState));
+          
+          // Additional verification after saving to localStorage
+          setTimeout(() => {
+            const savedState = localStorage.getItem(`gameState_${params.id}`);
+            if (savedState && attributeReward) {
+              const parsedState = JSON.parse(savedState) as GameState;
+              console.log('VERIFICATION - Value in localStorage:', {
+                attribute: attributeReward.attribute,
+                value: parsedState.character_data.attributes[attributeReward.attribute]
+              });
+            }
+          }, 100);
+        } catch (error) {
+          console.error('Error applying reward:', error);
+          // If there's an error with the reward, still show the AI response
+          const aiMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            content: aiResponseText,
+            sender: 'ai',
+            timestamp: new Date(),
+          };
+          
+          setMessages(prev => [...prev, aiMessage]);
+          
+          // Update game state with AI response only
+          setGameState({
+            ...updatedGameState,
+            history: [
+              ...updatedGameState.history,
+              {
+                message: aiResponseText,
+                sender: 'system' as 'user' | 'system',
+                timestamp: new Date().toISOString(),
+              },
+            ],
+            updated_at: new Date().toISOString(),
+          });
+        }
       } else {
         // Handle regular response
-        aiResponseText = typeof aiResponse === 'string' ? aiResponse : aiResponse.text;
+        aiResponseText = typeof aiResponse === 'string' ? aiResponse : 
+                        (aiResponse && typeof aiResponse.text === 'string' ? aiResponse.text : JSON.stringify(aiResponse));
         
         // Create AI message
         const aiMessage: Message = {
           id: (Date.now() + 1).toString(),
-          content: typeof aiResponseText === 'string' ? aiResponseText : JSON.stringify(aiResponseText),
+          content: aiResponseText,
           sender: 'ai',
           timestamp: new Date(),
         };
@@ -304,8 +426,8 @@ export default function ChatPage() {
   const handleUseSkill = async (skillName: string) => {
     if (!gameState || !scenario || isLoading) return;
     
-    // If this is the first interaction and the image is not loaded yet, don't proceed
-    if (isFirstInteraction && !isCharacterImageLoaded) return;
+    // If this is the first interaction and the image is not loaded yet, and we haven't timed out, don't proceed
+    if (isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout) return;
     
     // No longer the first interaction
     if (isFirstInteraction) {
@@ -390,10 +512,11 @@ export default function ChatPage() {
         timestamp: new Date(),
       };
       
+      // Add the AI narrative message
       setMessages(prev => [...prev, aiMessage]);
       
-      // Update game state with AI narrative response
-      setGameState({
+      // Get the game state with the AI narrative response
+      const gameStateWithNarrative: GameState = {
         ...gameStateWithSkillCheck,
         history: [
           ...gameStateWithSkillCheck.history,
@@ -404,7 +527,97 @@ export default function ChatPage() {
           },
         ],
         updated_at: new Date().toISOString(),
-      });
+      };
+      
+      // Check for rewards after the skill use
+      try {
+        // Make a separate call to check for rewards based on the skill use
+        const rewardCheckResult = await checkRewardsForSkill(gameStateWithNarrative, skillMessage.content, narrativeResponse);
+        
+        if (rewardCheckResult.attributeReward) {
+          console.group('🏆 SKILL REWARD RECEIVED');
+          console.log('Reward details:', rewardCheckResult.attributeReward);
+          
+          const attributeReward = rewardCheckResult.attributeReward as {
+            attribute: string;
+            amount: number;
+            reason: string;
+            achievement?: boolean;
+            achievementTitle?: string;
+          };
+          
+          // Check if the attribute exists in the character's attributes, if not, add it
+          if (!(attributeReward.attribute in gameStateWithNarrative.character_data.attributes)) {
+            console.log(`Adding new attribute: ${attributeReward.attribute}`);
+            gameStateWithNarrative.character_data.attributes[attributeReward.attribute] = 0;
+          }
+          
+          // Apply the attribute reward
+          const rewardApplyResult = await applyAttributeReward(gameStateWithNarrative, {
+            attribute: attributeReward.attribute,
+            amount: attributeReward.amount
+          });
+          
+          // Get the updated game state with the reward
+          const newGameState = JSON.parse(JSON.stringify(rewardApplyResult.gameState)) as GameState;
+          
+          // Create reward message based on whether it's an achievement or regular reward
+          let rewardMessage: Message;
+          
+          if (attributeReward.achievement) {
+            // Format special achievement reward
+            rewardMessage = {
+              id: (Date.now() + 3).toString(),
+              content: `🏆 ACHIEVEMENT UNLOCKED: "${attributeReward.achievementTitle || 'Achievement'}" 🏆\n\nYour ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}! ${attributeReward.reason}`,
+              sender: 'ai',
+              timestamp: new Date(),
+            };
+          } else {
+            // Regular reward format
+            rewardMessage = {
+              id: (Date.now() + 3).toString(),
+              content: `🏆 You've earned a reward! Your ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}. ${attributeReward.reason}`,
+              sender: 'ai',
+              timestamp: new Date(),
+            };
+          }
+          
+          // Add the reward message
+          setMessages(prev => [...prev, rewardMessage]);
+          
+          // Update the game state with the reward message
+          const finalGameState = {
+            ...newGameState,
+            history: [
+              ...newGameState.history,
+              {
+                message: rewardMessage.content,
+                sender: 'system' as 'user' | 'system',
+                timestamp: new Date().toISOString(),
+                reward: {
+                  type: attributeReward.achievement ? 'achievement' as 'attribute' | 'achievement' : 'attribute' as 'attribute' | 'achievement',
+                  attribute: attributeReward.attribute,
+                  amount: attributeReward.amount,
+                  ...(attributeReward.achievement ? { achievementTitle: attributeReward.achievementTitle } : {})
+                }
+              }
+            ],
+            updated_at: new Date().toISOString(),
+          };
+          
+          // Set the final game state
+          setGameState(finalGameState);
+          console.groupEnd();
+        } else {
+          // If no reward, just set the state with the narrative response
+          setGameState(gameStateWithNarrative);
+        }
+      } catch (rewardError) {
+        console.error('Error checking for rewards after skill use:', rewardError);
+        // If there's an error with rewards, just set the state with the narrative response
+        setGameState(gameStateWithNarrative);
+      }
+      
     } catch (error) {
       console.error('Error processing skill check:', error);
       
@@ -426,6 +639,104 @@ export default function ChatPage() {
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 100);
+  };
+
+  // Add this function to handle rendering achievement messages with special styling
+  const renderMessage = (message: Message) => {
+    const content = message.content;
+    
+    // Check if this is an achievement message
+    if (typeof content === 'string' && content.includes('🏆 ACHIEVEMENT UNLOCKED:')) {
+      // Parse achievement title
+      const titleMatch = content.match(/🏆 ACHIEVEMENT UNLOCKED: "([^"]+)"/);
+      const title = titleMatch ? titleMatch[1] : 'Achievement Unlocked';
+      
+      // Split remaining content
+      const [_, ...restContent] = content.split('\n\n');
+      const description = restContent.join('\n\n');
+      
+      return (
+        <div className="w-full">
+          <div className="bg-gradient-to-r from-yellow-500 to-amber-600 text-black font-bold p-2 rounded-t-lg text-center">
+            🏆 ACHIEVEMENT UNLOCKED 🏆
+          </div>
+          <div className="bg-gradient-to-b from-amber-400 to-amber-600 p-4 text-black rounded-b-lg">
+            <h3 className="text-xl font-bold mb-2">{title}</h3>
+            <p>{description}</p>
+          </div>
+        </div>
+      );
+    }
+    
+    // Check if this is a regular reward message
+    if (typeof content === 'string' && content.includes('You\'ve earned a reward!')) {
+      return (
+        <div className="bg-gradient-to-r from-amber-500 to-amber-700 text-white p-4 rounded-lg">
+          <p className="text-sm md:text-base">{content}</p>
+        </div>
+      );
+    }
+    
+    // Check if this is a skill check message
+    if (typeof content === 'string' && content.includes('[Skill Check:')) {
+      // ... existing skill check rendering code ...
+      return (
+        <div>
+          {/* Parse and display skill check message with better formatting */}
+          {(() => {
+            // Extract skill name, result, and roll details from message
+            const skillMatch = content.match(/\[Skill Check: ([^\]]+)\]/);
+            const successMatch = content.includes('successfully');
+            const skillName = skillMatch ? skillMatch[1] : 'Unknown Skill';
+            
+            // Extract numbers using regex
+            const rollMatch = content.match(/Rolled (\d+) \+ (\d+) = (\d+) vs DC (\d+)/);
+            const roll = rollMatch ? rollMatch[1] : '?';
+            const bonus = rollMatch ? rollMatch[2] : '?';
+            const total = rollMatch ? rollMatch[3] : '?';
+            const dc = rollMatch ? rollMatch[4] : '?';
+            
+            // Get narrative part
+            const narrativePart = content.split(') ')[1] || '';
+            
+            return (
+              <>
+                <div className="flex items-center mb-2">
+                  <span className={`font-bold mr-2 ${successMatch ? 'text-green-400' : 'text-red-400'}`}>
+                    {successMatch ? 'SUCCESS!' : 'FAILED!'}
+                  </span>
+                  <span className="text-gray-300">{skillName} Check</span>
+                </div>
+                <div className="flex space-x-3 text-xs mb-2">
+                  <div>
+                    <span className="text-gray-400">Roll:</span> {roll}
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Bonus:</span> +{bonus}
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Total:</span> {total}
+                  </div>
+                  <div>
+                    <span className="text-gray-400">DC:</span> {dc}
+                  </div>
+                </div>
+                <div className="mt-2 text-sm border-t border-gray-700 pt-2">
+                  {narrativePart}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      );
+    }
+    
+    // Default message rendering
+    return (
+      <p className="text-sm md:text-base">
+        {typeof content === 'object' ? JSON.stringify(content) : content}
+      </p>
+    );
   };
 
   if (initialLoading) {
@@ -503,34 +814,57 @@ export default function ChatPage() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Story Structure Panel - Toggle Button */}
+      <div className="sticky top-[108px] z-10 bg-gray-800 border-b border-gray-700 py-1 px-4">
+        <div className="container mx-auto flex justify-end">
+          <button
+            onClick={() => setShowStoryStructure(!showStoryStructure)}
+            className="text-xs text-purple-400 hover:text-purple-300 py-1 px-2 rounded flex items-center"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            {showStoryStructure ? 'Hide Game Plan' : 'Show Game Plan'}
+          </button>
+        </div>
+      </div>
+      
+      {/* Story Structure Panel - Content */}
+      {showStoryStructure && storyStructure && (
+        <div className="sticky top-[138px] z-10 bg-gray-800 border-b border-gray-700 py-2">
+          <div className="container mx-auto px-4">
+            <div className="bg-gradient-to-r from-indigo-900 to-purple-900 rounded-lg p-4">
+              <h3 className="text-white font-medium mb-2 text-sm flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                Game Plan (DM's Notes)
+              </h3>
               
-              {/* Skills */}
-              <div className="mt-3">
-                <h4 className="text-sm font-medium text-gray-300 mb-2">Skills</h4>
-                <div className="flex flex-wrap gap-2">
-                  {gameState && scenario && Object.entries(gameState.character_data.skills || {})
-                    .filter(([_, isAvailable]) => isAvailable)
-                    .map(([skillName, _]) => {
-                      const skill = scenario.baseSkills?.[skillName];
-                      const attributeValue = gameState.character_data.attributes[skill?.attribute || ''] || 0;
-                      
-                      return (
-                        <button
-                          key={skillName}
-                          onClick={() => handleUseSkill(skillName)}
-                          disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded)}
-                          className={`
-                            px-3 py-1.5 rounded text-sm flex items-center whitespace-nowrap
-                            ${isLoading || (isFirstInteraction && !isCharacterImageLoaded) ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-500'}
-                            transition-colors duration-300
-                          `}
-                          title={scenario.baseSkills?.[skillName]?.description || skillName}
-                        >
-                          <span className="mr-1">{skillName}</span>
-                          <span className="text-xs bg-gray-700 px-1.5 py-0.5 rounded">+{attributeValue}</span>
-                        </button>
-                      );
-                    })}
+              <div className="space-y-3">
+                <div>
+                  <h4 className="text-xs font-medium text-indigo-300 mb-1">Key Events:</h4>
+                  <ol className="list-decimal list-inside text-xs text-white space-y-1 pl-1">
+                    {storyStructure.events.map((event, index) => (
+                      <li key={index} className="text-gray-200">
+                        {event}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+                
+                <div>
+                  <h4 className="text-xs font-medium text-indigo-300 mb-1">Ending Goal:</h4>
+                  <p className="text-xs text-gray-200">{storyStructure.endingState}</p>
+                </div>
+                
+                <div className="text-xs text-gray-400 italic">
+                  Note: This is just a guide for the DM. Your choices will shape how the story unfolds.
                 </div>
               </div>
             </div>
@@ -555,19 +889,25 @@ export default function ChatPage() {
                 scenarioTitle={scenario.title || ''} 
                 onLoadComplete={() => {
                   setIsCharacterImageLoaded(true);
-                  console.log("Character image loaded successfully");
+                  console.log("Character image loaded or load handling complete");
                 }}
               />
               
               {/* First interaction loading message */}
-              {isFirstInteraction && !isCharacterImageLoaded && (
+              {isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout && (
                 <div className="mt-4 text-center">
                   <div className="animate-pulse text-purple-400 font-medium">
                     Generating your character image...
                   </div>
                   <p className="text-gray-400 text-sm mt-2">
-                    You'll be able to interact once the image has loaded
+                    You'll be able to interact in a moment
                   </p>
+                </div>
+              )}
+              
+              {imageLoadTimeout && (
+                <div className="mt-4 text-center text-yellow-400 text-sm">
+                  Continuing without character image
                 </div>
               )}
             </div>
@@ -584,67 +924,14 @@ export default function ChatPage() {
                     ? 'bg-purple-600 text-white'
                     : typeof message.content === 'string' && message.content.includes('[Skill Check:')
                       ? 'bg-gray-800 border border-indigo-500 text-gray-200'
-                      : typeof message.content === 'string' && message.content.includes('🏆 You\'ve earned a reward!')
-                        ? 'bg-gradient-to-r from-amber-500 to-amber-700 text-white'
-                        : 'bg-gray-700 text-gray-200'
+                      : typeof message.content === 'string' && message.content.includes('🏆 ACHIEVEMENT UNLOCKED:')
+                        ? 'p-0 overflow-hidden' // Container for achievement messages
+                        : typeof message.content === 'string' && message.content.includes('🏆 You\'ve earned a reward!')
+                          ? 'p-0' // No padding for reward messages
+                          : 'bg-gray-700 text-gray-200'
                 }`}
               >
-                {typeof message.content === 'string' && message.content.includes('[Skill Check:') ? (
-                  <div>
-                    {/* Parse and display skill check message with better formatting */}
-                    {(() => {
-                      // Extract skill name, result, and roll details from message
-                      const content = message.content as string;
-                      const skillMatch = content.match(/\[Skill Check: ([^\]]+)\]/);
-                      const successMatch = content.includes('successfully');
-                      const skillName = skillMatch ? skillMatch[1] : 'Unknown Skill';
-                      
-                      // Extract numbers using regex
-                      const rollMatch = content.match(/Rolled (\d+) \+ (\d+) = (\d+) vs DC (\d+)/);
-                      const roll = rollMatch ? rollMatch[1] : '?';
-                      const bonus = rollMatch ? rollMatch[2] : '?';
-                      const total = rollMatch ? rollMatch[3] : '?';
-                      const dc = rollMatch ? rollMatch[4] : '?';
-                      
-                      // Get narrative part
-                      const narrativePart = content.split(') ')[1] || '';
-                      
-                      return (
-                        <>
-                          <div className="flex items-center mb-2">
-                            <span className={`font-bold mr-2 ${successMatch ? 'text-green-400' : 'text-red-400'}`}>
-                              {successMatch ? 'SUCCESS!' : 'FAILED!'}
-                            </span>
-                            <span className="text-gray-300">{skillName} Check</span>
-                          </div>
-                          <div className="flex space-x-3 text-xs mb-2">
-                            <div>
-                              <span className="text-gray-400">Roll:</span> {roll}
-                            </div>
-                            <div>
-                              <span className="text-gray-400">Bonus:</span> +{bonus}
-                            </div>
-                            <div>
-                              <span className="text-gray-400">Total:</span> {total}
-                            </div>
-                            <div>
-                              <span className="text-gray-400">DC:</span> {dc}
-                            </div>
-                          </div>
-                          <div className="mt-2 text-sm border-t border-gray-700 pt-2">
-                            {narrativePart}
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </div>
-                ) : (
-                  <p className="text-sm md:text-base">{
-                    typeof message.content === 'object' 
-                      ? JSON.stringify(message.content) 
-                      : message.content
-                  }</p>
-                )}
+                {renderMessage(message)}
               </div>
             </div>
           ))}
@@ -693,10 +980,10 @@ export default function ChatPage() {
                       <button
                         key={skillName}
                         onClick={() => handleUseSkill(skillName)}
-                        disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded)}
+                        disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout)}
                         className={`
                           px-3 py-1.5 rounded text-sm flex items-center whitespace-nowrap
-                          ${isLoading || (isFirstInteraction && !isCharacterImageLoaded) ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-500'}
+                          ${isLoading || (isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout) ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-500'}
                           transition-colors duration-300
                         `}
                         title={scenario.baseSkills?.[skillName]?.description || skillName}
@@ -715,18 +1002,18 @@ export default function ChatPage() {
               type="text"
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
-              placeholder={isFirstInteraction && !isCharacterImageLoaded ? "Waiting for character image to load..." : "Type your message..."}
+              placeholder={isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout ? "Waiting for character image..." : "Type your message..."}
               className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
-              disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded)}
+              disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout)}
             />
             <button
               type="submit"
-              disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded)}
+              disabled={isLoading || (isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout)}
               className="bg-gradient-to-r from-purple-500 to-pink-600 text-white px-6 py-2 rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all duration-300 disabled:opacity-50"
             >
               {isLoading ? (
                 <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
-              ) : isFirstInteraction && !isCharacterImageLoaded ? (
+              ) : (isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout) ? (
                 <div className="animate-pulse">Loading...</div>
               ) : (
                 'Send'

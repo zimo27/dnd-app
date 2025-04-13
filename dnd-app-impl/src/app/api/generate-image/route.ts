@@ -8,6 +8,24 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Simple in-memory rate limiting
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 5;
+
+// Store of recent requests by character ID
+const requestLog: Record<string, number[]> = {};
+
+// Clean up old requests periodically
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(requestLog).forEach(key => {
+    requestLog[key] = requestLog[key].filter(timestamp => now - timestamp < RATE_LIMIT_WINDOW);
+    if (requestLog[key].length === 0) {
+      delete requestLog[key];
+    }
+  });
+}, 60 * 1000); // Clean up every minute
+
 /**
  * POST handler for generating character images
  */
@@ -21,6 +39,31 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    
+    // Implement rate limiting
+    const characterId = gameState.id;
+    
+    // Initialize if not exists
+    if (!requestLog[characterId]) {
+      requestLog[characterId] = [];
+    }
+    
+    // Check if we're over the rate limit
+    const now = Date.now();
+    const recentRequests = requestLog[characterId].filter(
+      timestamp => now - timestamp < RATE_LIMIT_WINDOW
+    );
+    
+    if (recentRequests.length >= MAX_REQUESTS_PER_WINDOW) {
+      console.log(`Rate limit exceeded for character ${characterId}. ${recentRequests.length} requests in the last minute.`);
+      return NextResponse.json(
+        { error: 'Too many image generation requests. Please try again later.' },
+        { status: 429 }
+      );
+    }
+    
+    // Log this request
+    requestLog[characterId].push(now);
     
     // Get the full scenario data for better context
     const scenario = await getScenarioById(gameState.scenario_id);
@@ -67,11 +110,24 @@ export async function POST(request: NextRequest) {
       imageUrl,
       prompt
     }, { status: 200 });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error in generate-image API:', error);
+    
+    // Provide more specific error messages based on the error type
+    let errorMessage = 'Failed to generate image';
+    let statusCode = 500;
+    
+    if (error.status === 429 || (error.error && error.error.code === 'rate_limit_exceeded')) {
+      errorMessage = 'OpenAI rate limit exceeded. Please try again later.';
+      statusCode = 429;
+    } else if (error.status === 400) {
+      errorMessage = 'Invalid request parameters for image generation';
+      statusCode = 400;
+    }
+    
     return NextResponse.json(
-      { error: 'Failed to generate image' },
-      { status: 500 }
+      { error: errorMessage },
+      { status: statusCode }
     );
   }
 } 

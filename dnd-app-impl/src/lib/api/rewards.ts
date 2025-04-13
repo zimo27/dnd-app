@@ -30,4 +30,32 @@ export async function applyAttributeReward(
     console.error('Error applying attribute reward:', error);
     throw error;
   }
+}
+
+/**
+ * Check for rewards after a skill check or other interaction
+ */
+export async function checkRewardsForSkill(
+  gameState: GameState,
+  userMessage: string,
+  aiResponse: string
+): Promise<{ attributeReward?: { attribute: string; amount: number; reason: string; achievement?: boolean; achievementTitle?: string } }> {
+  try {
+    const response = await fetch('/api/check-rewards', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ gameState, userMessage, aiResponse }),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to check for rewards');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error checking for rewards:', error);
+    return {}; // Return empty object if there's an error
+  }
 } 

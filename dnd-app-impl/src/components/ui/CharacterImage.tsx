@@ -15,8 +15,14 @@ export default function CharacterImage({ gameState, scenarioTitle, onLoadComplet
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [attemptedGeneration, setAttemptedGeneration] = useState(false);
 
   useEffect(() => {
+    // Only run this effect once per component lifecycle for a given gameState
+    // and only if we haven't already attempted generation
+    if (attemptedGeneration || retryCount >= 3) return;
+    
     async function loadCharacterImage() {
       // Check if we already have a cached image in localStorage
       const cachedImage = localStorage.getItem(`character_image_${gameState.id}`);
@@ -30,6 +36,7 @@ export default function CharacterImage({ gameState, scenarioTitle, onLoadComplet
       }
       
       try {
+        setAttemptedGeneration(true);
         setIsLoading(true);
         const url = await generateCharacterImage(gameState, scenarioTitle);
         setImageUrl(url);
@@ -38,16 +45,26 @@ export default function CharacterImage({ gameState, scenarioTitle, onLoadComplet
         localStorage.setItem(`character_image_${gameState.id}`, url);
       } catch (err) {
         console.error('Failed to generate character image:', err);
+        setRetryCount(prev => prev + 1);
         setError('Could not generate character image');
+        
+        // Still mark as complete after error to allow user to continue
+        if (retryCount >= 2) {
+          onLoadComplete?.();
+        }
       } finally {
         setIsLoading(false);
-        // Notify parent component that image is loaded (or failed to load)
-        onLoadComplete?.();
+        
+        // Even if there was an error, we want to notify the parent that the loading is complete
+        // after the third retry
+        if (retryCount >= 2) {
+          onLoadComplete?.();
+        }
       }
     }
 
     loadCharacterImage();
-  }, [gameState, scenarioTitle, onLoadComplete]);
+  }, [gameState.id, scenarioTitle, onLoadComplete, attemptedGeneration, retryCount]);
 
   if (isLoading) {
     return (

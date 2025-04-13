@@ -6,10 +6,19 @@ export interface GameState {
     attributes: Record<string, number>;
     skills: Record<string, boolean>;
     customizations: Record<string, string>;
+    achievements?: Achievement[];
   };
   history: Array<GameMessage>;
   created_at: string;
   updated_at: string;
+}
+
+export interface Achievement {
+  title: string;
+  description: string;
+  attribute: string;
+  amount: number;
+  timestamp: string;
 }
 
 export interface GameMessage {
@@ -22,9 +31,10 @@ export interface GameMessage {
     modified_value: number;
   };
   reward?: {
-    type: 'attribute';
+    type: 'attribute' | 'achievement';
     attribute: string;
     amount: number;
+    achievementTitle?: string;
   };
 }
 

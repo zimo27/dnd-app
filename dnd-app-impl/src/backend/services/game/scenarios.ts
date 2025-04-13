@@ -3,6 +3,9 @@ import { supabase } from '@/lib/api/supabase';
 import fs from 'fs';
 import path from 'path';
 
+// Cache for loaded scenario data
+const scenarioCache: Record<string, Scenario> = {};
+
 // Mock data for listing scenarios (minimal info)
 const MOCK_SCENARIOS: Record<string, Scenario> = {
   'AsianParent': {
@@ -38,16 +41,21 @@ export async function getScenarios(): Promise<Scenario[]> {
  */
 export async function getScenarioById(id: string): Promise<Scenario | null> {
   try {
+    // Check cache first
+    if (scenarioCache[id]) {
+      return scenarioCache[id];
+    }
+    
     // Try to load the full scenario data from JSON file
     try {
       const scenarioPath = path.join(process.cwd(), 'public', 'scenarios', `${id}.json`);
-      console.log(`Attempting to read scenario file from: ${scenarioPath}`);
+      // console.log(`Attempting to read scenario file from: ${scenarioPath}`);
       
       const fileContents = fs.readFileSync(scenarioPath, 'utf8');
       console.log(`Successfully read file for scenario: ${id}`);
       
       const jsonData = JSON.parse(fileContents);
-      console.log(`JSON parsed for scenario ${id}:`, jsonData);
+      // console.log(`JSON parsed for scenario ${id}:`, jsonData);
       
       // Map the JSON structure to match the expected Scenario interface
       const fullScenario: Scenario = {
@@ -61,11 +69,17 @@ export async function getScenarioById(id: string): Promise<Scenario | null> {
         playerCustomizations: jsonData.playerCustomizations
       };
       
-      console.log(`Mapped scenario data:`, fullScenario);
+      // Store in cache for future requests
+      scenarioCache[id] = fullScenario;
+      
       return fullScenario;
     } catch (fsError) {
       console.error(`Error loading scenario file for ${id}:`, fsError);
       // Fall back to mock data if file reading fails
+      if (MOCK_SCENARIOS[id]) {
+        // Cache even the mock data
+        scenarioCache[id] = MOCK_SCENARIOS[id];
+      }
       return MOCK_SCENARIOS[id] || null;
     }
   } catch (error) {
