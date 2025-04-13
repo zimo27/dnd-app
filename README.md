@@ -46,11 +46,16 @@ OPENAI_API_KEY=your-openai-api-key
 
 ## Project Structure
 
+The codebase follows a clear separation between frontend and backend components while maintaining a monorepo structure:
+
 - `/src/app` - Next.js App Router pages and layouts
 - `/src/components` - Reusable React components
-- `/src/lib` - Utility functions and API clients
-- `/src/types` - TypeScript type definitions
+- `/src/lib` - Frontend utility functions and API clients
+- `/src/backend` - Backend logic and services
+- `/src/shared` - Shared types and utilities
 - `/public` - Static assets
+
+For a more detailed breakdown of the project's organization including the complete frontend and backend separation, see the `PROJECT_STRUCTURE.md` file.
 
 ## Development Roadmap
 
