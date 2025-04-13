@@ -50,8 +50,7 @@ As the game master, respond to the player's actions while:
 1. Considering their attributes and skills when determining success probabilities
 2. Creating challenges appropriate to the scenario
 3. Maintaining the tone and context of the chosen scenario
-4. Offering opportunities to use their skills
-5. Responding in character and advancing the story based on the player's input
+4. Responding in character and advancing the story based on the player's input
 `;
 
     // Create properly typed messages array
