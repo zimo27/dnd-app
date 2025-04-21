@@ -1,0 +1,1 @@
+for this mini-game, trigger it in third round

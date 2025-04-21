@@ -12,6 +12,7 @@ import Header from '@/components/ui/Header';
 import CharacterImage from '@/components/ui/CharacterImage';
 import { checkForRewards } from '@/backend/services/ai/openai';
 import { TimingBarGame } from '@/components/features/MiniGames';
+import { RhythmMatchingGame } from '@/components/features/MiniGames';
 
 export default function ChatPage() {
   const params = useParams();
@@ -436,6 +437,9 @@ export default function ChatPage() {
       const result = await performSkillCheck(gameState, skillName);
       setSkillCheckResult(result);
       
+      // If skill check failed, we'll add the rhythm mini-game
+      const wasSkillSuccessful = result.success;
+      
       const skillMessage: Message = {
         id: Date.now().toString(),
         content: `I'll use my ${skillName} skill.`,
@@ -489,6 +493,44 @@ export default function ChatPage() {
       
       setGameState(gameStateWithSkillCheck);
       
+      // If skill check failed, trigger the rhythm mini-game to appease the president
+      if (!wasSkillSuccessful) {
+        console.log("Skill check failed, triggering rhythm mini-game");
+        
+        const triggerMessage: Message = {
+          id: (Date.now() + 2).toString(),
+          content: "The president looks upset with your failed attempt. Quick! You need to appease him by demonstrating your rhythm skills!",
+          sender: 'ai',
+          timestamp: new Date(),
+          miniGame: {
+            type: 'presidential-anger',
+            component: 'RhythmMatching'
+          }
+        };
+        
+        setMessages(prev => [...prev, triggerMessage]);
+        
+        const gameStateWithMiniGame: GameState = {
+          ...gameStateWithSkillCheck,
+          history: [
+            ...gameStateWithSkillCheck.history,
+            {
+              message: triggerMessage.content,
+              sender: 'system' as 'user' | 'system',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          updated_at: new Date().toISOString(),
+        };
+        
+        setGameState(gameStateWithMiniGame);
+        
+        // Return early to wait for mini-game completion
+        setIsLoading(false);
+        return;
+      }
+      
+      // Continue with normal narrative if no mini-game was triggered
       const narrativeResponse = await getNarrativeForSkill(gameStateWithSkillCheck, result);
       
       const aiMessage: Message = {
@@ -616,14 +658,41 @@ export default function ChatPage() {
     console.log("--- Mini-Game Completion ---");
     console.log(`Mini-game result: ${success ? 'SUCCESS' : 'FAILURE'}`);
     
-    const resultMessage: Message = {
-      id: Date.now().toString(),
-      content: success 
-        ? 'You prepared the perfect coffee! The President seems pleased with your attention to detail.'
-        : 'The coffee is not to the President\'s liking. He frowns slightly before continuing the conversation.',
-      sender: 'ai',
-      timestamp: new Date(),
-    };
+    // Get the latest message with a mini-game component to determine which mini-game just completed
+    const latestMiniGameMessage = [...messages].reverse().find(m => m.miniGame);
+    const miniGameType = latestMiniGameMessage?.miniGame?.type || 'coffee';
+    
+    let resultMessage: Message;
+    
+    if (miniGameType === 'coffee') {
+      resultMessage = {
+        id: Date.now().toString(),
+        content: success 
+          ? 'You prepared the perfect coffee! The President seems pleased with your attention to detail.'
+          : 'The coffee is not to the President\'s liking. He frowns slightly before continuing the conversation.',
+        sender: 'ai',
+        timestamp: new Date(),
+      };
+    } else if (miniGameType === 'presidential-anger') {
+      resultMessage = {
+        id: Date.now().toString(),
+        content: success 
+          ? 'Your rhythmic performance has impressed the President! His anger subsides and he looks at you with newfound respect.'
+          : 'Your rhythmic performance fails to calm the President. His frustration seems to grow even stronger.',
+        sender: 'ai',
+        timestamp: new Date(),
+      };
+    } else {
+      // Default message if type not recognized
+      resultMessage = {
+        id: Date.now().toString(),
+        content: success 
+          ? 'You completed the challenge successfully! The President seems pleased.'
+          : 'You failed the challenge. The President does not look happy.',
+        sender: 'ai',
+        timestamp: new Date(),
+      };
+    }
     
     console.log("Adding result message to chat:", resultMessage.content);
     setMessages(prev => [...prev, resultMessage]);
@@ -640,7 +709,7 @@ export default function ChatPage() {
           sender: 'system',
           timestamp: new Date().toISOString(),
           miniGame: {
-            type: 'coffee',
+            type: miniGameType,
             result: success ? 'success' : 'failure'
           }
         }
@@ -650,7 +719,8 @@ export default function ChatPage() {
     
     console.log("Updating game state with mini-game result:", {
       miniGamePlayed: true,
-      miniGameResult: success ? 'success' : 'failure'
+      miniGameResult: success ? 'success' : 'failure',
+      type: miniGameType
     });
     
     setGameState(updatedGameState);
@@ -661,8 +731,14 @@ export default function ChatPage() {
     console.log("Requesting AI response based on mini-game result...");
     
     try {
-      // Create custom prompt for AI
-      const customPrompt = `Continue the conversation with the knowledge that the player has just made coffee for the president and the result was ${success ? 'successful' : 'unsuccessful'}. If successful, the president is pleased and the conversation should take a positive direction. If unsuccessful, the president is disappointed and the conversation should take a negative direction.`;
+      // Create custom prompt for AI based on mini-game type
+      let customPrompt = '';
+      
+      if (miniGameType === 'coffee') {
+        customPrompt = `Continue the conversation with the knowledge that the player has just made coffee for the president and the result was ${success ? 'successful' : 'unsuccessful'}. If successful, the president is pleased and the conversation should take a positive direction. If unsuccessful, the president is disappointed and the conversation should take a negative direction.`;
+      } else if (miniGameType === 'presidential-anger') {
+        customPrompt = `Continue the conversation with the knowledge that the player has just performed a rhythm game to appease the president after failing a skill check. The performance was ${success ? 'successful' : 'unsuccessful'}. If successful, the president's anger has subsided and he's impressed by your rhythmic skills. If unsuccessful, the president remains frustrated and the conversation should reflect his continued disappointment.`;
+      }
       
       console.log("Custom prompt for AI:", customPrompt);
       
@@ -794,6 +870,19 @@ export default function ChatPage() {
               <TimingBarGame 
                 onComplete={handleMiniGameComplete}
                 difficulty="medium"
+              />
+            </div>
+          </div>
+        );
+      }
+      if (message.miniGame.component === 'RhythmMatching') {
+        return (
+          <div className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
+            <div className="bg-gray-700 rounded-lg p-2 shadow-md max-w-[80%]">
+              <RhythmMatchingGame 
+                onComplete={handleMiniGameComplete}
+                difficulty="medium"
+                targetMatches={10}
               />
             </div>
           </div>

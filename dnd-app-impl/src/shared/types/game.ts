@@ -52,7 +52,7 @@ export interface Message {
   timestamp: Date;
   miniGame?: {
     type: string;
-    component: 'TimingBar';
+    component: 'TimingBar' | 'RhythmMatching';
   };
 }
 
