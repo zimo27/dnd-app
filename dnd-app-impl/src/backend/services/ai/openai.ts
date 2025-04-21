@@ -128,7 +128,8 @@ Your response should be in JSON format with the following structure:
 export async function generateResponse(
   gameState: GameState,
   userMessage: string,
-  storyStructure?: { events: string[], endingState: string }
+  storyStructure?: { events: string[], endingState: string } | null,
+  customPrompt?: string
 ): Promise<string> {
   try {
     // Get the full scenario data to provide better context
@@ -138,7 +139,7 @@ export async function generateResponse(
     }
 
     // Construct a detailed system prompt with scenario and character information
-    const systemPrompt = `
+    let systemPrompt = `
 You are a role-playing game master for the D&D-style scenario: ${scenario['Dnd-Scenario'] || scenario.title}. 
 ${scenario.description || ''}
 
@@ -170,6 +171,12 @@ ${Object.entries(gameState.character_data.skills || {})
   .map(([skillName, _]) => `- ${skillName}: ${scenario.baseSkills?.[skillName]?.description || ''}`)
   .join('\n')}
 
+${gameState.miniGameResult ? `
+MINI-GAME STATUS:
+The player has completed a mini-game with result: ${gameState.miniGameResult}.
+This should influence your response accordingly.
+` : ''}
+
 As the game master, respond to the player's actions while:
 1. Considering their attributes and skills when determining success probabilities
 2. Creating challenges appropriate to the scenario
@@ -180,6 +187,11 @@ ${storyStructure ? '6. Guiding the narrative toward the next key event or the en
 
 Focus on advancing the story and providing an engaging response to the player's actions.
 `;
+
+    // Add custom prompt if provided
+    if (customPrompt) {
+      systemPrompt += `\n\nSPECIAL INSTRUCTION:\n${customPrompt}`;
+    }
 
     // Create properly typed messages array
     const systemMessage: ChatCompletionSystemMessageParam = {

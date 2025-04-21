@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/auth';
 import Header from '@/components/ui/Header';
 import CharacterImage from '@/components/ui/CharacterImage';
 import { checkForRewards } from '@/backend/services/ai/openai';
+import { TimingBarGame } from '@/components/features/MiniGames';
 
 export default function ChatPage() {
   const params = useParams();
@@ -23,30 +24,34 @@ export default function ChatPage() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [showStats, setShowStats] = useState(false);
-  // Note: skillCheckResult state is maintained for game logic but the display is now integrated into chat messages
   const [skillCheckResult, setSkillCheckResult] = useState<SkillCheckResult | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isFirstInteraction, setIsFirstInteraction] = useState(true);
-  const [isCharacterImageLoaded, setIsCharacterImageLoaded] = useState(false);
+  const [isCharacterImageLoaded, setIsCharacterImageLoaded] = useState(true);
   const [storyStructure, setStoryStructure] = useState<{ events: string[], endingState: string } | null>(null);
   const [showStoryStructure, setShowStoryStructure] = useState(false);
   const [imageLoadTimeout, setImageLoadTimeout] = useState(false);
+  const [showMiniGame, setShowMiniGame] = useState(false);
+  const [miniGameTriggerMessage, setMiniGameTriggerMessage] = useState<string | null>(null);
 
-  // Initialize game state and welcome message
   useEffect(() => {
     async function initialize() {
       try {
-        // Get scenario details
         const scenarioData = await fetchScenarioById(params.id as string);
         setScenario(scenarioData);
         
-        // Try to load existing game state from localStorage
         const savedGameState = localStorage.getItem(`gameState_${params.id}`);
         let newGameState: GameState;
         
         if (savedGameState) {
           newGameState = JSON.parse(savedGameState);
           console.log('Loaded saved game state:', newGameState);
+          
+          if (newGameState.conversationRound === undefined) {
+            newGameState.conversationRound = newGameState.history.filter(
+              msg => msg.sender === 'user'
+            ).length;
+          }
           
           // Try to load saved story structure
           const savedStoryStructure = localStorage.getItem(`storyStructure_${params.id}`);
@@ -55,7 +60,6 @@ export default function ChatPage() {
             console.log('Loaded saved story structure:', JSON.parse(savedStoryStructure));
           }
         } else {
-          // Redirect to character creation if no saved game state
           router.push(`/scenarios/${params.id}/character`);
           return;
         }
@@ -123,46 +127,67 @@ export default function ChatPage() {
     initialize();
   }, [params.id, user, router]);
 
-  // Add a timeout for image loading to allow gameplay even if image generation fails
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!isCharacterImageLoaded) {
-        console.log("Image load timeout reached - allowing interaction");
-        setImageLoadTimeout(true);
-        setIsCharacterImageLoaded(true); // Force enable interaction
-      }
-    }, 15000); // 15 seconds timeout
-    
-    return () => clearTimeout(timer);
-  }, [isCharacterImageLoaded]);
-
-  // Debug effect to track attribute changes
   useEffect(() => {
     if (gameState) {
       console.log("Game state updated, current attributes:", gameState.character_data.attributes);
     }
   }, [gameState]);
 
-  // Scroll to bottom whenever messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Save game state to localStorage whenever it changes
   useEffect(() => {
     if (gameState) {
       localStorage.setItem(`gameState_${params.id}`, JSON.stringify(gameState));
     }
   }, [gameState, params.id]);
 
+  useEffect(() => {
+    if (!gameState || gameState.miniGamePlayed) return;
+    
+    const userMessageCount = gameState.history.filter(msg => msg.sender === 'user').length;
+    
+    console.log("--- Mini-Game Trigger Debugging ---");
+    console.log(`Current conversation round: ${userMessageCount}`);
+    console.log(`Mini-game already played: ${gameState.miniGamePlayed ? 'Yes' : 'No'}`);
+    console.log(`Current conversationRound in state: ${gameState.conversationRound}`);
+    
+    if (gameState.conversationRound !== userMessageCount) {
+      console.log(`Updating conversationRound from ${gameState.conversationRound} to ${userMessageCount}`);
+      setGameState(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          conversationRound: userMessageCount
+        };
+      });
+    }
+    
+    if (userMessageCount === 1 && !gameState.miniGamePlayed) {
+      console.log("First conversation round detected - checking for trigger conditions");
+      const recentMessages = gameState.history.slice(-2);
+      const latestAiMessage = recentMessages.find(msg => msg.sender === 'system');
+      
+      console.log("Latest AI message:", latestAiMessage?.message);
+      
+      console.log("Triggering mini-game at first conversation round");
+      setMiniGameTriggerMessage(latestAiMessage?.message || "The president would like you to prepare some coffee.");
+      setShowMiniGame(true);
+      
+      console.log("Mini-game display triggered:", {
+        showMiniGame: true,
+        triggerMessage: latestAiMessage?.message || "The president would like you to prepare some coffee."
+      });
+    }
+  }, [gameState]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim() || isLoading || !gameState) return;
 
-    // If this is the first interaction and the image is not loaded yet, don't proceed
     if (isFirstInteraction && !isCharacterImageLoaded) return;
 
-    // No longer the first interaction
     if (isFirstInteraction) {
       setIsFirstInteraction(false);
     }
@@ -179,7 +204,6 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
-      // Update game state with the new message
       const updatedGameState: GameState = {
         ...gameState,
         history: [
@@ -195,26 +219,20 @@ export default function ChatPage() {
       
       setGameState(updatedGameState);
       
-      // Get AI response with story structure guidance
       const aiResponse = await generateChatResponse(
         updatedGameState,
-        userMessage.content,
-        storyStructure || undefined
+        storyStructure
       );
       
-      // Add debug log to see raw response from API
       console.log('Raw AI response from API:', aiResponse);
       
       let aiResponseText: string;
       let attributeReward: { attribute: string; amount: number; reason: string; achievement?: boolean; achievementTitle?: string } | null = null;
       
-      // Check if the response includes an attribute reward
       if (typeof aiResponse === 'object' && aiResponse.attributeReward) {
-        // Handle attribute reward
         console.group('🏆 ATTRIBUTE REWARD RECEIVED');
         console.log('Reward details:', aiResponse.attributeReward);
         
-        // Properly extract the text field from the response object
         aiResponseText = typeof aiResponse.text === 'string' ? aiResponse.text : JSON.stringify(aiResponse.text);
         attributeReward = aiResponse.attributeReward as { 
           attribute: string; 
@@ -224,10 +242,8 @@ export default function ChatPage() {
           achievementTitle?: string;
         };
         
-        // Check if the attribute exists in the character's attributes, if not, add it
         if (!(attributeReward.attribute in updatedGameState.character_data.attributes)) {
           console.log(`Adding new attribute: ${attributeReward.attribute}`);
-          // Create a copy of the gameState to avoid direct mutation
           const newGameState = { ...updatedGameState };
           newGameState.character_data = { 
             ...newGameState.character_data,
@@ -237,17 +253,14 @@ export default function ChatPage() {
             }
           };
           setGameState(newGameState);
-          // Use the updated state for further processing
           updatedGameState.character_data.attributes[attributeReward.attribute] = 0;
         }
         
-        // Log current attributes before update
         console.log('Current attributes before update:', {
           ...updatedGameState.character_data.attributes
         });
         
         try {
-          // Apply the attribute reward
           const rewardResult = await applyAttributeReward(updatedGameState, {
             attribute: attributeReward.attribute,
             amount: attributeReward.amount
@@ -255,10 +268,8 @@ export default function ChatPage() {
           
           console.log('API response from reward application:', rewardResult);
           
-          // Deep clone the updated gameState to avoid reference issues
           const newGameState = JSON.parse(JSON.stringify(rewardResult.gameState)) as GameState;
           
-          // Compare the attribute values to confirm update
           console.log('Attribute comparison:', {
             attribute: attributeReward.attribute,
             before: updatedGameState.character_data.attributes[attributeReward.attribute] || 0,
@@ -267,11 +278,9 @@ export default function ChatPage() {
                       (updatedGameState.character_data.attributes[attributeReward.attribute] || 0)
           });
           
-          // Add reward notification to messages
           let rewardMessage: Message;
           
           if (attributeReward.achievement) {
-            // Format special achievement reward
             rewardMessage = {
               id: (Date.now() + 2).toString(),
               content: `🏆 ACHIEVEMENT UNLOCKED: "${attributeReward.achievementTitle || 'Achievement'}" 🏆\n\nYour ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}! ${attributeReward.reason}`,
@@ -279,7 +288,6 @@ export default function ChatPage() {
               timestamp: new Date(),
             };
           } else {
-            // Regular reward format
             rewardMessage = {
               id: (Date.now() + 2).toString(),
               content: `🏆 You've earned a reward! Your ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}. ${attributeReward.reason}`,
@@ -288,7 +296,6 @@ export default function ChatPage() {
             };
           }
           
-          // Create AI message
           const aiMessage: Message = {
             id: (Date.now() + 1).toString(),
             content: aiResponseText,
@@ -296,10 +303,8 @@ export default function ChatPage() {
             timestamp: new Date(),
           };
           
-          // Add both messages
           setMessages(prev => [...prev, aiMessage, rewardMessage]);
           
-          // Create a new gameState object with the updated attributes and history
           const finalGameState = {
             ...newGameState,
             history: [
@@ -324,7 +329,6 @@ export default function ChatPage() {
             updated_at: new Date().toISOString(),
           };
           
-          // Log the final gameState
           console.log('Final gameState after reward:', {
             attributes: finalGameState.character_data.attributes,
             attribute: attributeReward.attribute,
@@ -332,13 +336,10 @@ export default function ChatPage() {
           });
           console.groupEnd();
           
-          // Save the game state
           setGameState(finalGameState);
           
-          // Immediately save to localStorage to make sure it persists
           localStorage.setItem(`gameState_${params.id}`, JSON.stringify(finalGameState));
           
-          // Additional verification after saving to localStorage
           setTimeout(() => {
             const savedState = localStorage.getItem(`gameState_${params.id}`);
             if (savedState && attributeReward) {
@@ -351,7 +352,6 @@ export default function ChatPage() {
           }, 100);
         } catch (error) {
           console.error('Error applying reward:', error);
-          // If there's an error with the reward, still show the AI response
           const aiMessage: Message = {
             id: (Date.now() + 1).toString(),
             content: aiResponseText,
@@ -361,7 +361,6 @@ export default function ChatPage() {
           
           setMessages(prev => [...prev, aiMessage]);
           
-          // Update game state with AI response only
           setGameState({
             ...updatedGameState,
             history: [
@@ -376,11 +375,9 @@ export default function ChatPage() {
           });
         }
       } else {
-        // Handle regular response
         aiResponseText = typeof aiResponse === 'string' ? aiResponse : 
                         (aiResponse && typeof aiResponse.text === 'string' ? aiResponse.text : JSON.stringify(aiResponse));
         
-        // Create AI message
         const aiMessage: Message = {
           id: (Date.now() + 1).toString(),
           content: aiResponseText,
@@ -390,7 +387,6 @@ export default function ChatPage() {
         
         setMessages(prev => [...prev, aiMessage]);
         
-        // Update game state with AI response
         setGameState({
           ...updatedGameState,
           history: [
@@ -408,7 +404,6 @@ export default function ChatPage() {
     } catch (error) {
       console.error('Error getting AI response:', error);
       
-      // Add error message
       setMessages(prev => [
         ...prev,
         {
@@ -426,10 +421,8 @@ export default function ChatPage() {
   const handleUseSkill = async (skillName: string) => {
     if (!gameState || !scenario || isLoading) return;
     
-    // If this is the first interaction and the image is not loaded yet, and we haven't timed out, don't proceed
     if (isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout) return;
     
-    // No longer the first interaction
     if (isFirstInteraction) {
       setIsFirstInteraction(false);
     }
@@ -440,11 +433,9 @@ export default function ChatPage() {
     setIsLoading(true);
     
     try {
-      // Use the API to perform the skill check
       const result = await performSkillCheck(gameState, skillName);
       setSkillCheckResult(result);
       
-      // Add skill check message - as a user message, not AI
       const skillMessage: Message = {
         id: Date.now().toString(),
         content: `I'll use my ${skillName} skill.`,
@@ -454,7 +445,6 @@ export default function ChatPage() {
       
       setMessages(prev => [...prev, skillMessage]);
       
-      // Update game state with the user's skill selection
       const updatedGameState: GameState = {
         ...gameState,
         history: [
@@ -470,7 +460,6 @@ export default function ChatPage() {
       
       setGameState(updatedGameState);
       
-      // Now add the skill check result as an AI message
       const skillResultMessage: Message = {
         id: (Date.now() + 1).toString(),
         content: `[Skill Check: ${skillName}] ${result.narrativeResult} (Rolled ${result.roll} + ${result.attributeValue} = ${result.roll + result.attributeValue} vs DC ${result.difficulty})`,
@@ -480,7 +469,6 @@ export default function ChatPage() {
       
       setMessages(prev => [...prev, skillResultMessage]);
       
-      // Update game state with the skill check result
       const gameStateWithSkillCheck: GameState = {
         ...updatedGameState,
         history: [
@@ -501,10 +489,8 @@ export default function ChatPage() {
       
       setGameState(gameStateWithSkillCheck);
       
-      // Get narrative continuation based on skill check
       const narrativeResponse = await getNarrativeForSkill(gameStateWithSkillCheck, result);
       
-      // Create AI message with narrative continuation
       const aiMessage: Message = {
         id: (Date.now() + 2).toString(),
         content: narrativeResponse,
@@ -512,10 +498,8 @@ export default function ChatPage() {
         timestamp: new Date(),
       };
       
-      // Add the AI narrative message
       setMessages(prev => [...prev, aiMessage]);
       
-      // Get the game state with the AI narrative response
       const gameStateWithNarrative: GameState = {
         ...gameStateWithSkillCheck,
         history: [
@@ -529,9 +513,7 @@ export default function ChatPage() {
         updated_at: new Date().toISOString(),
       };
       
-      // Check for rewards after the skill use
       try {
-        // Make a separate call to check for rewards based on the skill use
         const rewardCheckResult = await checkRewardsForSkill(gameStateWithNarrative, skillMessage.content, narrativeResponse);
         
         if (rewardCheckResult.attributeReward) {
@@ -546,26 +528,21 @@ export default function ChatPage() {
             achievementTitle?: string;
           };
           
-          // Check if the attribute exists in the character's attributes, if not, add it
           if (!(attributeReward.attribute in gameStateWithNarrative.character_data.attributes)) {
             console.log(`Adding new attribute: ${attributeReward.attribute}`);
             gameStateWithNarrative.character_data.attributes[attributeReward.attribute] = 0;
           }
           
-          // Apply the attribute reward
           const rewardApplyResult = await applyAttributeReward(gameStateWithNarrative, {
             attribute: attributeReward.attribute,
             amount: attributeReward.amount
           });
           
-          // Get the updated game state with the reward
           const newGameState = JSON.parse(JSON.stringify(rewardApplyResult.gameState)) as GameState;
           
-          // Create reward message based on whether it's an achievement or regular reward
           let rewardMessage: Message;
           
           if (attributeReward.achievement) {
-            // Format special achievement reward
             rewardMessage = {
               id: (Date.now() + 3).toString(),
               content: `🏆 ACHIEVEMENT UNLOCKED: "${attributeReward.achievementTitle || 'Achievement'}" 🏆\n\nYour ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}! ${attributeReward.reason}`,
@@ -573,7 +550,6 @@ export default function ChatPage() {
               timestamp: new Date(),
             };
           } else {
-            // Regular reward format
             rewardMessage = {
               id: (Date.now() + 3).toString(),
               content: `🏆 You've earned a reward! Your ${attributeReward.attribute} has increased by ${attributeReward.amount.toFixed(1)}. ${attributeReward.reason}`,
@@ -582,10 +558,8 @@ export default function ChatPage() {
             };
           }
           
-          // Add the reward message
           setMessages(prev => [...prev, rewardMessage]);
           
-          // Update the game state with the reward message
           const finalGameState = {
             ...newGameState,
             history: [
@@ -605,23 +579,19 @@ export default function ChatPage() {
             updated_at: new Date().toISOString(),
           };
           
-          // Set the final game state
           setGameState(finalGameState);
           console.groupEnd();
         } else {
-          // If no reward, just set the state with the narrative response
           setGameState(gameStateWithNarrative);
         }
       } catch (rewardError) {
         console.error('Error checking for rewards after skill use:', rewardError);
-        // If there's an error with rewards, just set the state with the narrative response
         setGameState(gameStateWithNarrative);
       }
       
     } catch (error) {
       console.error('Error processing skill check:', error);
       
-      // Add error message
       setMessages(prev => [
         ...prev,
         {
@@ -635,23 +605,121 @@ export default function ChatPage() {
       setIsLoading(false);
     }
     
-    // Auto-scroll
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 100);
   };
 
-  // Add this function to handle rendering achievement messages with special styling
+  const handleMiniGameComplete = async (success: boolean) => {
+    if (!gameState) return;
+    
+    console.log("--- Mini-Game Completion ---");
+    console.log(`Mini-game result: ${success ? 'SUCCESS' : 'FAILURE'}`);
+    
+    const resultMessage: Message = {
+      id: Date.now().toString(),
+      content: success 
+        ? 'You prepared the perfect coffee! The President seems pleased with your attention to detail.'
+        : 'The coffee is not to the President\'s liking. He frowns slightly before continuing the conversation.',
+      sender: 'ai',
+      timestamp: new Date(),
+    };
+    
+    console.log("Adding result message to chat:", resultMessage.content);
+    setMessages(prev => [...prev, resultMessage]);
+    
+    // Update game state
+    const updatedGameState: GameState = {
+      ...gameState,
+      miniGamePlayed: true,
+      miniGameResult: success ? 'success' : 'failure',
+      history: [
+        ...gameState.history,
+        {
+          message: resultMessage.content,
+          sender: 'system',
+          timestamp: new Date().toISOString(),
+          miniGame: {
+            type: 'coffee',
+            result: success ? 'success' : 'failure'
+          }
+        }
+      ],
+      updated_at: new Date().toISOString(),
+    };
+    
+    console.log("Updating game state with mini-game result:", {
+      miniGamePlayed: true,
+      miniGameResult: success ? 'success' : 'failure'
+    });
+    
+    setGameState(updatedGameState);
+    setShowMiniGame(false);
+    
+    // Get AI response that takes into account the mini-game result
+    setIsLoading(true);
+    console.log("Requesting AI response based on mini-game result...");
+    
+    try {
+      // Create custom prompt for AI
+      const customPrompt = `Continue the conversation with the knowledge that the player has just made coffee for the president and the result was ${success ? 'successful' : 'unsuccessful'}. If successful, the president is pleased and the conversation should take a positive direction. If unsuccessful, the president is disappointed and the conversation should take a negative direction.`;
+      
+      console.log("Custom prompt for AI:", customPrompt);
+      
+      const aiResponse = await generateChatResponse(
+        updatedGameState,
+        storyStructure,
+        customPrompt
+      );
+      
+      // Convert the response to string
+      const aiResponseText = typeof aiResponse === 'string' 
+        ? aiResponse 
+        : (aiResponse && typeof aiResponse.text === 'string' 
+            ? aiResponse.text 
+            : JSON.stringify(aiResponse));
+      
+      console.log("Received AI response:", aiResponseText.substring(0, 100) + "...");
+      
+      const aiMessage: Message = {
+        id: Date.now().toString(),
+        content: aiResponseText,
+        sender: 'ai',
+        timestamp: new Date(),
+      };
+      
+      setMessages(prev => [...prev, aiMessage]);
+      
+      const finalGameState: GameState = {
+        ...updatedGameState,
+        history: [
+          ...updatedGameState.history,
+          {
+            message: aiResponseText,
+            sender: 'system' as 'user' | 'system',
+            timestamp: new Date().toISOString(),
+          }
+        ],
+        updated_at: new Date().toISOString(),
+      };
+      
+      console.log("Updating final game state with AI response");
+      setGameState(finalGameState);
+    } catch (error) {
+      console.error('Error getting AI response after mini-game:', error);
+    } finally {
+      setIsLoading(false);
+      console.log("Mini-game sequence completed");
+    }
+  };
+
   const renderMessage = (message: Message) => {
     const content = message.content;
     
-    // Check if this is an achievement message
     if (typeof content === 'string' && content.includes('🏆 ACHIEVEMENT UNLOCKED:')) {
-      // Parse achievement title
       const titleMatch = content.match(/🏆 ACHIEVEMENT UNLOCKED: "([^"]+)"/);
       const title = titleMatch ? titleMatch[1] : 'Achievement Unlocked';
       
-      // Split remaining content
       const [_, ...restContent] = content.split('\n\n');
       const description = restContent.join('\n\n');
       
@@ -668,7 +736,6 @@ export default function ChatPage() {
       );
     }
     
-    // Check if this is a regular reward message
     if (typeof content === 'string' && content.includes('You\'ve earned a reward!')) {
       return (
         <div className="bg-gradient-to-r from-amber-500 to-amber-700 text-white p-4 rounded-lg">
@@ -677,65 +744,73 @@ export default function ChatPage() {
       );
     }
     
-    // Check if this is a skill check message
     if (typeof content === 'string' && content.includes('[Skill Check:')) {
-      // ... existing skill check rendering code ...
+      const skillMatch = content.match(/\[Skill Check: ([^\]]+)\]/);
+      const successMatch = content.includes('successfully');
+      const skillName = skillMatch ? skillMatch[1] : 'Unknown Skill';
+      
+      const rollMatch = content.match(/Rolled (\d+) \+ (\d+) = (\d+) vs DC (\d+)/);
+      const roll = rollMatch ? rollMatch[1] : '?';
+      const bonus = rollMatch ? rollMatch[2] : '?';
+      const total = rollMatch ? rollMatch[3] : '?';
+      const dc = rollMatch ? rollMatch[4] : '?';
+      
+      const narrativePart = content.split(') ')[1] || '';
+      
       return (
         <div>
-          {/* Parse and display skill check message with better formatting */}
-          {(() => {
-            // Extract skill name, result, and roll details from message
-            const skillMatch = content.match(/\[Skill Check: ([^\]]+)\]/);
-            const successMatch = content.includes('successfully');
-            const skillName = skillMatch ? skillMatch[1] : 'Unknown Skill';
-            
-            // Extract numbers using regex
-            const rollMatch = content.match(/Rolled (\d+) \+ (\d+) = (\d+) vs DC (\d+)/);
-            const roll = rollMatch ? rollMatch[1] : '?';
-            const bonus = rollMatch ? rollMatch[2] : '?';
-            const total = rollMatch ? rollMatch[3] : '?';
-            const dc = rollMatch ? rollMatch[4] : '?';
-            
-            // Get narrative part
-            const narrativePart = content.split(') ')[1] || '';
-            
-            return (
-              <>
-                <div className="flex items-center mb-2">
-                  <span className={`font-bold mr-2 ${successMatch ? 'text-green-400' : 'text-red-400'}`}>
-                    {successMatch ? 'SUCCESS!' : 'FAILED!'}
-                  </span>
-                  <span className="text-gray-300">{skillName} Check</span>
-                </div>
-                <div className="flex space-x-3 text-xs mb-2">
-                  <div>
-                    <span className="text-gray-400">Roll:</span> {roll}
-                  </div>
-                  <div>
-                    <span className="text-gray-400">Bonus:</span> +{bonus}
-                  </div>
-                  <div>
-                    <span className="text-gray-400">Total:</span> {total}
-                  </div>
-                  <div>
-                    <span className="text-gray-400">DC:</span> {dc}
-                  </div>
-                </div>
-                <div className="mt-2 text-sm border-t border-gray-700 pt-2">
-                  {narrativePart}
-                </div>
-              </>
-            );
-          })()}
+          <div className="flex items-center mb-2">
+            <span className={`font-bold mr-2 ${successMatch ? 'text-green-400' : 'text-red-400'}`}>
+              {successMatch ? 'SUCCESS!' : 'FAILED!'}
+            </span>
+            <span className="text-gray-300">{skillName} Check</span>
+          </div>
+          <div className="flex space-x-3 text-xs mb-2">
+            <div>
+              <span className="text-gray-400">Roll:</span> {roll}
+            </div>
+            <div>
+              <span className="text-gray-400">Bonus:</span> +{bonus}
+            </div>
+            <div>
+              <span className="text-gray-400">Total:</span> {total}
+            </div>
+            <div>
+              <span className="text-gray-400">DC:</span> {dc}
+            </div>
+          </div>
+          <div className="mt-2 text-sm border-t border-gray-700 pt-2">
+            {narrativePart}
+          </div>
         </div>
       );
     }
     
-    // Default message rendering
+    if (message.miniGame) {
+      if (message.miniGame.component === 'TimingBar') {
+        return (
+          <div className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
+            <div className="bg-gray-700 rounded-lg p-2 shadow-md max-w-[80%]">
+              <TimingBarGame 
+                onComplete={handleMiniGameComplete}
+                difficulty="medium"
+              />
+            </div>
+          </div>
+        );
+      }
+    }
+    
     return (
-      <p className="text-sm md:text-base">
-        {typeof content === 'object' ? JSON.stringify(content) : content}
-      </p>
+      <div className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
+        <div className={`rounded-lg p-2 shadow-md max-w-[80%] ${
+          message.sender === 'user' 
+            ? 'bg-blue-600 text-white' 
+            : 'bg-gray-700 text-white'
+        }`}>
+          <p className="whitespace-pre-wrap">{message.content}</p>
+        </div>
+      </div>
     );
   };
 
@@ -749,11 +824,9 @@ export default function ChatPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex flex-col relative">
-      {/* Top section - Header and back link - Fixed */}
       <div className="sticky top-0 z-10 bg-gradient-to-br from-gray-900 to-gray-800 shadow-md">
         <Header />
         
-        {/* Back to Scenario Link */}
         <div className="bg-gray-800 border-b border-gray-700">
           <div className="container mx-auto px-4 py-2 flex justify-between items-center">
             <Link
@@ -766,7 +839,6 @@ export default function ChatPage() {
               Back to Scenario
             </Link>
             
-            {/* Character Stats Toggle */}
             <button
               onClick={() => setShowStats(!showStats)}
               className="text-purple-400 hover:text-purple-300 flex items-center text-sm"
@@ -780,7 +852,6 @@ export default function ChatPage() {
         </div>
       </div>
       
-      {/* Character Stats Panel - Conditionally Shown - Fixed */}
       {showStats && gameState && (
         <div className="sticky top-[108px] z-10 bg-gray-800 border-b border-gray-700 py-3">
           <div className="container mx-auto px-4">
@@ -788,7 +859,6 @@ export default function ChatPage() {
               <h3 className="text-white font-medium mb-3">Character Sheet</h3>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Customizations */}
                 <div>
                   <h4 className="text-sm font-medium text-gray-300 mb-2">Character</h4>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1">
@@ -801,7 +871,6 @@ export default function ChatPage() {
                   </div>
                 </div>
                 
-                {/* Attributes */}
                 <div>
                   <h4 className="text-sm font-medium text-gray-300 mb-2">Attributes</h4>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1">
@@ -819,7 +888,6 @@ export default function ChatPage() {
         </div>
       )}
       
-      {/* Story Structure Panel - Toggle Button */}
       <div className="sticky top-[108px] z-10 bg-gray-800 border-b border-gray-700 py-1 px-4">
         <div className="container mx-auto flex justify-end">
           <button
@@ -834,7 +902,6 @@ export default function ChatPage() {
         </div>
       </div>
       
-      {/* Story Structure Panel - Content */}
       {showStoryStructure && storyStructure && (
         <div className="sticky top-[138px] z-10 bg-gray-800 border-b border-gray-700 py-2">
           <div className="container mx-auto px-4">
@@ -872,44 +939,21 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* Chat Messages Area - Scrollable */}
       <div 
         className="flex-1 overflow-y-auto p-4"
         style={{ 
-          height: "calc(100vh - 220px)", // Adjust based on header + input heights
+          height: "calc(100vh - 220px)",
           overflowY: "auto"
         }}
       >
         <div className="max-w-3xl mx-auto space-y-4 pb-4">
-          {/* Character Portrait - Display at the beginning of the chat */}
           {gameState && scenario && messages.length > 0 && (
             <div className="mb-6">
-              <CharacterImage 
-                gameState={gameState} 
-                scenarioTitle={scenario.title || ''} 
-                onLoadComplete={() => {
-                  setIsCharacterImageLoaded(true);
-                  console.log("Character image loaded or load handling complete");
-                }}
-              />
-              
-              {/* First interaction loading message */}
-              {isFirstInteraction && !isCharacterImageLoaded && !imageLoadTimeout && (
-                <div className="mt-4 text-center">
-                  <div className="animate-pulse text-purple-400 font-medium">
-                    Generating your character image...
-                  </div>
-                  <p className="text-gray-400 text-sm mt-2">
-                    You'll be able to interact in a moment
-                  </p>
-                </div>
-              )}
-              
-              {imageLoadTimeout && (
-                <div className="mt-4 text-center text-yellow-400 text-sm">
-                  Continuing without character image
-                </div>
-              )}
+              <div className="w-full aspect-square max-w-xs mx-auto bg-gray-700 rounded-lg flex items-center justify-center">
+                <p className="text-gray-400 text-center p-4">
+                  Character image generation temporarily disabled
+                </p>
+              </div>
             </div>
           )}
           
@@ -925,9 +969,9 @@ export default function ChatPage() {
                     : typeof message.content === 'string' && message.content.includes('[Skill Check:')
                       ? 'bg-gray-800 border border-indigo-500 text-gray-200'
                       : typeof message.content === 'string' && message.content.includes('🏆 ACHIEVEMENT UNLOCKED:')
-                        ? 'p-0 overflow-hidden' // Container for achievement messages
+                        ? 'p-0 overflow-hidden'
                         : typeof message.content === 'string' && message.content.includes('🏆 You\'ve earned a reward!')
-                          ? 'p-0' // No padding for reward messages
+                          ? 'p-0'
                           : 'bg-gray-700 text-gray-200'
                 }`}
               >
@@ -936,7 +980,6 @@ export default function ChatPage() {
             </div>
           ))}
           
-          {/* Loading indicator for AI response */}
           {isLoading && (
             <div className="flex justify-start">
               <div className="bg-gray-700 text-gray-200 max-w-[80%] rounded-lg p-4">
@@ -950,14 +993,27 @@ export default function ChatPage() {
             </div>
           )}
           
+          {showMiniGame && (
+            <div className="flex justify-center mb-4">
+              <div className="bg-gray-800 rounded-lg p-4 shadow-lg w-full max-w-md">
+                <h3 className="text-xl font-bold mb-2 text-center">Coffee Challenge!</h3>
+                <p className="text-gray-300 mb-4 text-center">
+                  The President has asked you to prepare a coffee. Control the temperature correctly to impress him!
+                </p>
+                <TimingBarGame 
+                  onComplete={handleMiniGameComplete}
+                  difficulty="medium"
+                />
+              </div>
+            </div>
+          )}
+          
           <div ref={messagesEndRef} />
         </div>
       </div>
 
-      {/* Bottom section - Input Form - Fixed */}
       <div className="sticky bottom-0 z-10 border-t border-gray-700 bg-gray-800 p-4 shadow-lg">
         <div className="max-w-3xl mx-auto">
-          {/* Skills Bar */}
           {gameState && scenario && (
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">

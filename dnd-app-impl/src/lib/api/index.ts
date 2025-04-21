@@ -73,8 +73,8 @@ export async function generateStoryStructure(
  */
 export async function generateChatResponse(
   gameState: GameState, 
-  message: string,
-  storyStructure?: { events: string[], endingState: string }
+  storyStructure?: { events: string[], endingState: string } | null,
+  customPrompt?: string
 ): Promise<string | { text: string; attributeReward?: { attribute: string; amount: number; reason: string } }> {
   try {
     const response = await fetch('/api/chat', {
@@ -82,7 +82,11 @@ export async function generateChatResponse(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ gameState, message, storyStructure }),
+      body: JSON.stringify({ 
+        gameState, 
+        storyStructure,
+        customPrompt
+      }),
     });
     
     if (!response.ok) {

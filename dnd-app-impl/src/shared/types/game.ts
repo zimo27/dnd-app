@@ -11,6 +11,9 @@ export interface GameState {
   history: Array<GameMessage>;
   created_at: string;
   updated_at: string;
+  conversationRound?: number;
+  miniGamePlayed?: boolean;
+  miniGameResult?: 'success' | 'failure';
 }
 
 export interface Achievement {
@@ -36,6 +39,10 @@ export interface GameMessage {
     amount: number;
     achievementTitle?: string;
   };
+  miniGame?: {
+    type: string;
+    result: 'success' | 'failure';
+  };
 }
 
 export interface Message {
@@ -43,6 +50,10 @@ export interface Message {
   content: string;
   sender: 'user' | 'ai';
   timestamp: Date;
+  miniGame?: {
+    type: string;
+    component: 'TimingBar';
+  };
 }
 
 export interface Scenario {

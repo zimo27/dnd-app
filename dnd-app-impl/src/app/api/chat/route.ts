@@ -7,21 +7,33 @@ import { GameState } from '@/shared/types/game';
  */
 export async function POST(request: NextRequest) {
   try {
-    const { gameState, message, storyStructure } = await request.json();
+    const { gameState, storyStructure, customPrompt } = await request.json();
     
-    // if (!gameState || !message) {
-    //   return NextResponse.json(
-    //     { error: 'Missing required parameters' },
-    //     { status: 400 }
-    //   );
-    // }
+    if (!gameState) {
+      return NextResponse.json(
+        { error: 'Missing required parameters' },
+        { status: 400 }
+      );
+    }
+    
+    // Extract the last user message from history
+    const lastUserMessage = gameState.history[gameState.history.length - 1]?.message || '';
     
     // Generate the AI's narrative response
-    const aiResponse = await generateResponse(gameState as GameState, message, storyStructure);
+    const aiResponse = await generateResponse(
+      gameState as GameState, 
+      lastUserMessage,
+      storyStructure,
+      customPrompt
+    );
     console.log('OpenAI narrative response generated:', { length: aiResponse.length });
     
     // Make a separate call to check for rewards
-    const rewardResult = await checkForRewards(gameState as GameState, message, aiResponse);
+    const rewardResult = await checkForRewards(
+      gameState as GameState, 
+      lastUserMessage, 
+      aiResponse
+    );
     console.log('Reward check result:', 
       rewardResult.attributeReward 
         ? { 
